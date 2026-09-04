@@ -1,0 +1,145 @@
+---
+description: Zirve Ahşap projesinin temel mimari, veri güvenliği ve hesaplama kuralları
+alwaysApply: true
+---
+
+# Zirve Ahşap – Core Project Rules
+
+Bu proje Zirve Ahşap için geliştirilen Maliyet ve Fiyatlandırma Sistemidir.
+
+## 1. Genel Kurallar
+
+- Kullanıcı açıkça istemediği sürece mevcut mimariyi değiştirme.
+- Bilinmeyen iş kuralını tahmin etme.
+- Eksik bilgi varsa implementation yapmadan önce belirt.
+- Kullanıcı tarafından doğrulanmamış Excel/görsel verilerini kesin iş kuralı kabul etme.
+- Mevcut çalışan yapıyı gereksiz refactor etme.
+- Her görevde yalnızca istenen fazı uygula; sonraki fazlara kendiliğinden geçme.
+
+## 2. Teknoloji
+
+Frontend: React + TypeScript + Vite
+Backend: NestJS + TypeScript
+Database: PostgreSQL
+ORM: Prisma
+Hesaplama: decimal.js / Prisma Decimal
+
+Frontend doğrudan PostgreSQL'e erişemez.
+
+Akış: React UI → NestJS API → Validation / Business Rules → Calculation Engine → Prisma → PostgreSQL
+
+## 3. Hesaplama Güvenliği
+
+- Para hesaplamalarında JavaScript `Number`, `float` veya `double` kullanma.
+- Para ve oran hesaplarında `Decimal` kullan.
+- Kritik maliyet hesaplarını frontend'de yapma; tüm gerçek hesaplar backend Calculation Engine içinde olmalıdır.
+- Formülleri birden fazla yerde tekrar etme.
+- Sessiz fallback veya eksik veriyi `0` kabul etme; eksik/uyumsuz veri varsa açık hata üret.
+- Yuvarlama kuralını kullanıcı doğrulamadan varsayma.
+
+## 4. Kapı Kasası Kuralları
+
+Phase 1 doğrulama ürünü KAPI KASASI'dır.
+
+- Bir kasa iki MDF parçasından oluşur (örn. 34 mm kasa = 22 mm MDF + 12 mm MDF).
+- `22 mm` / `12 mm` → MDF KALINLIĞI (`thickness_mm`)
+- `10x210`, `11x210` gibi değerler → parça EN × BOY ölçüsü (`piece_width_mm` × `piece_length_mm`)
+- Bu iki kavramı asla birbirine karıştırma.
+
+Temel parça maliyeti: `sheet_price / doğrulanmış NET adet`
+
+Bu mantık yalnızca kapı kasasına özgüdür.
+
+## 5. Diğer Ürünleri Kapı Kasasına Zorlama
+
+- Her ürünün iki parçadan oluşacağını varsayma.
+- Her ürünün production yield / NET adet kullanacağını varsayma.
+- Kapı kasası kurallarını pervaz, süpürgelik, çıta, kapak vb. ürünlere otomatik uygulama.
+- Phase 1: `DoorFrameCalculator`. İleride her ürünün kendi calculator'ı olabilir; gereksiz generic mega-engine oluşturma.
+
+## 6. NET Adet
+
+NET adet kritik üretim master datasıdır.
+
+- NET adedi geometrik formülle yeniden hesaplama.
+- Excel'deki teorik formüllerden NET adet türetme.
+- Yalnızca doğrulanmış `production_yields` verisini kullan.
+- Yanlış ölçünün NET adedini başka üründe kullanma.
+- `raw material + parça ölçüsü + production yield` ilişkisini doğrula.
+- `netQty <= 0` kabul etme.
+- NET adet değişiklikleri audit edilmelidir.
+
+## 7. Ölçü Birimleri
+
+- Fiziksel ölçünün birimini asla tahmin etme.
+- Internal canonical uzunluk birimi MM'dir (örn. 10 cm → 100 mm, 210 cm → 2100 mm).
+- `thickness_mm` (MDF kalınlığı) ile `piece_width_mm` / `piece_length_mm` aynı kavram değildir.
+- UI iş terminolojisinde `10x210` gösterebilir; bu backend veriyle karıştırılmamalıdır.
+
+## 8. MDF ve Fiyat
+
+- `raw_materials`: malzemenin kimliğidir.
+- `raw_material_prices`: fiyat geçmişidir.
+- MDF fiyatını kod içerisine hard-code etme; yönetim ekranından değiştirilebilir olmalıdır.
+- Geçmiş fiyatları silip üzerine yazma.
+- Audit ile fiyat geçmişini aynı kavram olarak değerlendirme.
+
+## 9. Değiştirilebilir Veriler
+
+Aşağıdaki değerler kod içerisinde sabit olmamalı; yönetim ekranından değiştirilmeli:
+
+MDF fiyatı · NET adet · kesim · tutkal · işçilik · diğer giderler · KDV · kârlılık · kredi kartı farkı · fiyatlandırma parametreleri
+
+Akış: UI → Backend → Validation → Database
+
+## 10. Excel Referansı
+
+- Mevcut Excel, Kapı Kasası V1 hesap mantığının ana referansıdır.
+- Çelişkili formülleri kendin düzeltme; başlık ile formül farklıysa çelişkiyi raporla.
+- Kullanıcı doğrulamadan yeni hesap kuralı üretme.
+- V1 başarı kriteri: doğrulanmış Excel hesabını backend'de doğru şekilde yeniden üretmek.
+
+## 11. Satış Fiyatları
+
+Sistemde en az iki satış fiyatı olabilir: Nakit · Kredi Kartı / Taksitli
+
+Ham MDF alış fiyatındaki `CASH / CARD_INSTALLMENT` kavramı ile ürün satış fiyatı kavramını karıştırma. Satış fiyatı formüllerini kullanıcı doğrulamadan tahmin etme.
+
+## 12. Database Güvenliği
+
+Mümkün olan yerlerde kullan: Primary Key · Foreign Key · UNIQUE · CHECK · NOT NULL · Transaction
+
+- Sadece frontend validation'a güvenme.
+- Backend ve mümkün olduğunda PostgreSQL seviyesinde de veri bütünlüğü sağla.
+- Negatif fiyat, negatif gider, `0` NET adet ve geçersiz ölçü kabul etme.
+
+## 13. Audit
+
+Kritik değişiklikler audit edilmelidir: MDF fiyatı · NET adet · ek maliyet · fiyatlandırma parametreleri
+
+- Audit kaydı mümkünse asıl değişiklikle aynı transaction içerisinde yazılmalıdır.
+- Phase 1'de auth yoktur; `actor = "local-admin"` kullanılabilir.
+
+## 14. Authentication
+
+Phase 1'de şunları ekleme: login · JWT · users · roles · sessions · authorization
+
+Production/internet erişimi ayrı fazda değerlendirilecektir.
+
+## 15. Test
+
+- Calculation Engine değişikliklerinde unit test yaz.
+- Doğrulanmış Excel senaryoları golden test olarak kullanılmalıdır.
+- Bir iş kuralı değişikliği mevcut doğru sonuçları bozarsa testler başarısız olmalıdır.
+
+## 16. En Önemli Davranış
+
+Emin olmadığın bir hesaplama kuralında:
+
+**TAHMİN ETME.**
+
+Bunun yerine şunu söyle:
+
+> "Bu iş kuralı kullanıcı tarafından doğrulanmalıdır."
+
+…ve kritik implementation'ı durdur.
