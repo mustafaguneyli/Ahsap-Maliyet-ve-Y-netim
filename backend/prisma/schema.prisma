@@ -47,6 +47,8 @@ model Product {
   productGroup    ProductGroup     @relation(fields: [productGroupId], references: [id], onDelete: Restrict)
   recipes         Recipe[]
   extraCostValues ExtraCostValue[]
+  pricingSettings PricingSetting[]
+  priceOverrides  PriceOverride[]
 
   @@unique([productGroupId, code])
   @@map("products")
@@ -61,7 +63,8 @@ model ProductSize {
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
-  recipes Recipe[]
+  recipes        Recipe[]
+  priceOverrides PriceOverride[]
 
   @@unique([widthMm, lengthMm])
   @@map("product_sizes")
@@ -201,10 +204,13 @@ model ExtraCostValue {
 }
 
 /// Type-safe fiyatlandırma parametreleri. Faz 1A'da hesap motorunda kullanılmaz.
-/// Aynı productGroup için tek aktif kayıt: partial unique migration SQL'inde tanımlanır.
+/// Kapsam: productGroupId (grup) veya productId (ürün) veya ikisi de null (global).
+/// İkisi aynı anda dolu olamaz. Tekillik: migration SQL partial unique index
+/// (grup / ürün / yalnızca ikisi de null olan global).
 model PricingSetting {
   id             String   @id @default(uuid()) @db.Uuid
   productGroupId String?  @map("product_group_id") @db.Uuid
+  productId      String?  @map("product_id") @db.Uuid
   vatRate        Decimal? @map("vat_rate") @db.Decimal(8, 4)
   profitRate     Decimal? @map("profit_rate") @db.Decimal(8, 4)
   cardMarkupRate Decimal? @map("card_markup_rate") @db.Decimal(8, 4)
@@ -213,8 +219,30 @@ model PricingSetting {
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   productGroup ProductGroup? @relation(fields: [productGroupId], references: [id], onDelete: Restrict)
+  product      Product?      @relation(fields: [productId], references: [id], onDelete: Restrict)
 
+  @@index([productGroupId, productId])
   @@map("pricing_settings")
+}
+
+/// Ticari nakit fiyat override. Hesaplanan (calculated) fiyatı değiştirmez.
+/// Aynı product + productSize için yalnızca tek aktif kayıt (partial unique, SQL).
+/// Eski kayıt isActive=false ile korunur; overwrite yok.
+model PriceOverride {
+  id            String   @id @default(uuid()) @db.Uuid
+  productId     String   @map("product_id") @db.Uuid
+  productSizeId String   @map("product_size_id") @db.Uuid
+  cashPrice     Decimal  @map("cash_price") @db.Decimal(14, 4)
+  reason        String?
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  product     Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+  productSize ProductSize @relation(fields: [productSizeId], references: [id], onDelete: Restrict)
+
+  @@index([productId, productSizeId])
+  @@map("price_overrides")
 }
 
 /// Append-only değişiklik izi. Fiyat geçmişi raw_material_prices üzerindedir.

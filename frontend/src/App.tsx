@@ -1,11 +1,15 @@
 import { useEffect, useState } from 'react';
 import './App.css';
+import { CostCalculationPage } from './pages/cost-calculation-page';
+import { ExtraCostsPage } from './pages/extra-costs-page';
+import { ProductionYieldsPage } from './pages/production-yields-page';
 import { RawMaterialsPage } from './pages/raw-materials-page';
 
 type PageId =
   | 'dashboard'
   | 'materials'
   | 'yields'
+  | 'cost-calculation'
   | 'products'
   | 'recipes'
   | 'extra-costs'
@@ -16,6 +20,7 @@ const pages: { id: PageId; label: string }[] = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'materials', label: 'Ham Maddeler' },
   { id: 'yields', label: 'NET Üretim Adetleri' },
+  { id: 'cost-calculation', label: 'Maliyet Hesaplama' },
   { id: 'products', label: 'Ürünler' },
   { id: 'recipes', label: 'Reçeteler' },
   { id: 'extra-costs', label: 'Ek Maliyetler' },
@@ -85,6 +90,12 @@ function App() {
             </section>
           ) : page === 'materials' ? (
             <RawMaterialsPage />
+          ) : page === 'yields' ? (
+            <ProductionYieldsPage />
+          ) : page === 'cost-calculation' ? (
+            <CostCalculationPage />
+          ) : page === 'extra-costs' ? (
+            <ExtraCostsPage />
           ) : (
             <section className="card">
               <p>{current?.label} ekranı sonraki fazlarda geliştirilecektir.</p>

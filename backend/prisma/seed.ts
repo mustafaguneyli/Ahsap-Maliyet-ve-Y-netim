@@ -1,5 +1,11 @@
 import { MaterialPriceType, PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
+import { seedDoorFrameExtraCosts } from '../src/modules/extra-costs/door-frame-extra-cost-seed';
+import { seedDoorFramePriceOverrides } from '../src/modules/price-overrides/door-frame-price-override-seed';
+import { seedDoorFramePricingSettings } from '../src/modules/pricing/door-frame-pricing-seed';
+import { seedDoorFrameProducts } from '../src/modules/products/door-frame-product-seed';
+import { seedDoorFrameProductSizes } from '../src/modules/products/door-frame-product-size-seed';
+import { seedDoorFrameProductionYields } from '../src/modules/production-yields/door-frame-yield-seed-data';
 
 /**
  * DEMPAŞ 2026-3 Revize Ham MDF fiyat tablosu.
@@ -343,6 +349,50 @@ async function main(): Promise<void> {
 
     console.log(
       `Seed tamamlandı. Yeni ham madde: ${createdMaterials}, yeni açık fiyat: ${createdPrices}. Toplam master: ${MATERIALS.length}.`,
+    );
+
+    const yieldReport = await seedDoorFrameProductionYields(prisma);
+    console.log(
+      `Kapı Kasası NET seed: beklenen=${yieldReport.totalExpected}, yeni=${yieldReport.created}, aynı=${yieldReport.unchanged}, conflict=${yieldReport.conflicts.length}, eksikHamMadde=${yieldReport.missingMaterials.length}`,
+    );
+    if (yieldReport.missingMaterials.length > 0) {
+      console.warn('Eksik ham maddeler:', yieldReport.missingMaterials.join(', '));
+    }
+    if (yieldReport.conflicts.length > 0) {
+      console.warn('NET conflict (overwrite yok):');
+      for (const c of yieldReport.conflicts) {
+        console.warn(
+          `  ${c.materialCode} ${c.pieceWidthMm}x${c.pieceLengthMm}: DB=${c.existingNetQty}, Excel=${c.excelNetQty}`,
+        );
+      }
+    }
+
+    const extraCostReport = await seedDoorFrameExtraCosts(prisma);
+    console.log(
+      `Kapı Kasası ek maliyet seed: grupYeni=${extraCostReport.productGroupCreated}, tipYeni=${extraCostReport.typesCreated}, değerYeni=${extraCostReport.valuesCreated}, mevcutAtlandı=${extraCostReport.valuesSkippedExisting}`,
+    );
+
+    const productReport = await seedDoorFrameProducts(prisma);
+    console.log(
+      `Kapı Kasası ürün seed: grupYeni=${productReport.productGroupCreated}, ürünYeni=${productReport.productsCreated}, mevcutAtlandı=${productReport.productsSkippedExisting}`,
+    );
+
+    const sizeReport = await seedDoorFrameProductSizes(prisma);
+    console.log(
+      `Kapı Kasası ölçü seed: yeni=${sizeReport.created}, mevcutAtlandı=${sizeReport.skippedExisting}`,
+    );
+
+    const pricingReport = await seedDoorFramePricingSettings(prisma);
+    console.log(
+      `Kapı Kasası fiyatlandırma seed: yeni=${pricingReport.created}, kartFarkıDolduruldu=${pricingReport.cardMarkupBackfilled}, mevcutAtlandı=${pricingReport.skippedExisting}, eksikÜrün=${pricingReport.missingProducts.length}`,
+    );
+    if (pricingReport.missingProducts.length > 0) {
+      console.warn('Eksik ürünler:', pricingReport.missingProducts.join(', '));
+    }
+
+    const overrideReport = await seedDoorFramePriceOverrides(prisma);
+    console.log(
+      `Kapı Kasası nakit override seed: yeni=${overrideReport.created}, mevcutAtlandı=${overrideReport.skippedExisting}, eksikÜrün=${overrideReport.missingProduct}, eksikÖlçü=${overrideReport.missingSizes.join(',') || 'yok'}`,
     );
   } finally {
     await prisma.$disconnect();

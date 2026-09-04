@@ -15,6 +15,23 @@ export function formatTry(value: string | null | undefined): string {
   return `${negative ? '-' : ''}₺${grouped},${frac}`;
 }
 
+/** Oran gösterimi — hesap yapmaz. "0" → "%0", "10" → "%10" */
+export function formatPercentRate(value: string | null | undefined): string {
+  if (value == null || value === '') return '—';
+
+  const negative = value.startsWith('-');
+  const raw = negative ? value.slice(1) : value;
+  const [intPartRaw, fracRaw = ''] = raw.split('.');
+  const intPart = intPartRaw.replace(/^0+(?=\d)/, '') || '0';
+  const fracTrim = fracRaw.replace(/0+$/, '');
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+  if (!fracTrim) {
+    return `${negative ? '-' : ''}%${grouped}`;
+  }
+  return `${negative ? '-' : ''}%${grouped},${fracTrim}`;
+}
+
 export function formatDateTr(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);

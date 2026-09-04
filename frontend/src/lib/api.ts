@@ -26,8 +26,20 @@ export function resolveApiErrorMessage(
   const raw = body?.message;
   const message = Array.isArray(raw) ? raw.join(' ') : raw;
 
-  if (status === 409 || (message && /zaten var|already|unique|duplicate|P2002/i.test(message))) {
-    return 'Bu ham madde kodu zaten kullanılıyor.';
+  if (status === 409) {
+    if (
+      message &&
+      /NET adet|parça ölçüsü|production.?yield|aktif kombinasyon/i.test(message)
+    ) {
+      return 'Bu ham madde ve parça ölçüsü için aktif bir NET adet zaten mevcut.';
+    }
+    if (message && /code|ham madde kodu/i.test(message)) {
+      return 'Bu ham madde kodu zaten kullanılıyor.';
+    }
+    if (message && message.trim().length > 0) {
+      return message;
+    }
+    return 'Bu kayıt zaten mevcut.';
   }
 
   if (message && message.trim().length > 0) {
@@ -42,11 +54,12 @@ export async function apiRequest<T>(
   options?: RequestInit,
 ): Promise<T> {
   const response = await fetch(`${apiUrl}${path}`, {
+    ...options,
+    cache: 'no-store',
     headers: {
       'Content-Type': 'application/json',
       ...(options?.headers ?? {}),
     },
-    ...options,
   });
 
   if (response.status === 204) {

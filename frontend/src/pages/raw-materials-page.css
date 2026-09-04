@@ -180,6 +180,29 @@
   color: #374151;
 }
 
+.rm-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.rm-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+.rm-badge.ok {
+  background: #ecfdf5;
+  color: #065f46;
+}
+
+.rm-badge.muted {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
 .rm-summary {
   padding: 10px 12px;
   background: #f9fafb;
