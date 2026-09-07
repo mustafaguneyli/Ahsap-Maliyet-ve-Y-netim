@@ -183,7 +183,11 @@ describe('CostCalculationService fiyat yayılımı', () => {
       listForProductGroup: jest.fn().mockResolvedValue(extraList),
     };
 
-    return new CostCalculationService(prisma as never, extraCostsService as never);
+    return new CostCalculationService(
+      prisma as never,
+      extraCostsService as never,
+      { resolvePervazPiece: jest.fn(), resolveKilcik: jest.fn() } as never,
+    );
   }
 
   it('22mm 4400→4700 sonrası 10×210 22mm maliyeti değişir, 12mm değişmez', async () => {

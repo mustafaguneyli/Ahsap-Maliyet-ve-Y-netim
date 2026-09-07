@@ -1,11 +1,18 @@
 import { MaterialPriceType, PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { seedDoorFrameExtraCosts } from '../src/modules/extra-costs/door-frame-extra-cost-seed';
+import { seedPervazExtraCosts } from '../src/modules/extra-costs/pervaz-extra-cost-seed';
 import { seedDoorFramePriceOverrides } from '../src/modules/price-overrides/door-frame-price-override-seed';
 import { seedDoorFramePricingSettings } from '../src/modules/pricing/door-frame-pricing-seed';
+import { seedAyarliPervazPricingSettings } from '../src/modules/pricing/ayarli-pervaz-pricing-seed';
+import { seedAyarliPervazPricingRowExceptions } from '../src/modules/pricing/ayarli-pervaz-pricing-row-exception-seed';
 import { seedDoorFrameProducts } from '../src/modules/products/door-frame-product-seed';
 import { seedDoorFrameProductSizes } from '../src/modules/products/door-frame-product-size-seed';
+import { seedPervazProducts } from '../src/modules/products/pervaz-product-seed';
+import { seedKilcikTypes } from '../src/modules/pervaz/kilcik-type-seed';
+import { seedAyarliPervazKilcikYields } from '../src/modules/pervaz/ayarli-pervaz-kilcik-yield-seed';
 import { seedDoorFrameProductionYields } from '../src/modules/production-yields/door-frame-yield-seed-data';
+import { seedAyarliPervazProductionYields } from '../src/modules/production-yields/pervaz-ayarli-yield-seed-data';
 
 /**
  * DEMPAŞ 2026-3 Revize Ham MDF fiyat tablosu.
@@ -367,6 +374,22 @@ async function main(): Promise<void> {
       }
     }
 
+    const ayarliPervazYieldReport = await seedAyarliPervazProductionYields(prisma);
+    console.log(
+      `Ayarlı Pervaz NET seed: beklenen=${ayarliPervazYieldReport.totalExpected}, yeni=${ayarliPervazYieldReport.created}, aynı=${ayarliPervazYieldReport.unchanged}, conflict=${ayarliPervazYieldReport.conflicts.length}, eksikHamMadde=${ayarliPervazYieldReport.missingMaterials.length}`,
+    );
+    if (ayarliPervazYieldReport.missingMaterials.length > 0) {
+      console.warn('Eksik ham maddeler:', ayarliPervazYieldReport.missingMaterials.join(', '));
+    }
+    if (ayarliPervazYieldReport.conflicts.length > 0) {
+      console.warn('Ayarlı Pervaz NET conflict (overwrite yok):');
+      for (const c of ayarliPervazYieldReport.conflicts) {
+        console.warn(
+          `  ${c.materialCode} ${c.pieceWidthMm}x${c.pieceLengthMm}: DB=${c.existingNetQty}, Excel=${c.excelNetQty}`,
+        );
+      }
+    }
+
     const extraCostReport = await seedDoorFrameExtraCosts(prisma);
     console.log(
       `Kapı Kasası ek maliyet seed: grupYeni=${extraCostReport.productGroupCreated}, tipYeni=${extraCostReport.typesCreated}, değerYeni=${extraCostReport.valuesCreated}, mevcutAtlandı=${extraCostReport.valuesSkippedExisting}`,
@@ -376,6 +399,42 @@ async function main(): Promise<void> {
     console.log(
       `Kapı Kasası ürün seed: grupYeni=${productReport.productGroupCreated}, ürünYeni=${productReport.productsCreated}, mevcutAtlandı=${productReport.productsSkippedExisting}`,
     );
+
+    const pervazProductReport = await seedPervazProducts(prisma);
+    console.log(
+      `Pervaz ürün seed: grupYeni=${pervazProductReport.productGroupCreated}, ürünYeni=${pervazProductReport.productsCreated}, mevcutAtlandı=${pervazProductReport.productsSkippedExisting}`,
+    );
+
+    const pervazExtraCostReport = await seedPervazExtraCosts(prisma);
+    console.log(
+      `Pervaz ek maliyet seed: beklenen=${pervazExtraCostReport.totalExpected}, yeni=${pervazExtraCostReport.created}, aynı=${pervazExtraCostReport.unchanged}, conflict=${pervazExtraCostReport.conflicts.length}, eksikGrup=${pervazExtraCostReport.missingProductGroup}, eksikTip=${pervazExtraCostReport.missingTypes.join(',') || 'yok'}`,
+    );
+    if (pervazExtraCostReport.conflicts.length > 0) {
+      console.warn('Pervaz ek maliyet conflict (overwrite yok):');
+      for (const c of pervazExtraCostReport.conflicts) {
+        console.warn(
+          `  ${c.typeCode}: DB=${c.existingAmount}, Excel=${c.excelAmount}`,
+        );
+      }
+    }
+
+    const kilcikTypeReport = await seedKilcikTypes(prisma);
+    console.log(
+      `Kılçık tipi seed: yeni=${kilcikTypeReport.created}, mevcutAtlandı=${kilcikTypeReport.skippedExisting}`,
+    );
+
+    const ayarliKilcikYieldReport = await seedAyarliPervazKilcikYields(prisma);
+    console.log(
+      `Ayarlı Pervaz kılçık NET seed: beklenen=${ayarliKilcikYieldReport.totalExpected}, yeni=${ayarliKilcikYieldReport.created}, normalize=${ayarliKilcikYieldReport.normalized}, aynı=${ayarliKilcikYieldReport.unchanged}, conflict=${ayarliKilcikYieldReport.conflicts.length}, eksikÜrün=${ayarliKilcikYieldReport.missingProduct}, eksikHamMadde=${ayarliKilcikYieldReport.missingMaterial}`,
+    );
+    if (ayarliKilcikYieldReport.conflicts.length > 0) {
+      console.warn('Ayarlı Pervaz kılçık NET conflict (overwrite yok):');
+      for (const c of ayarliKilcikYieldReport.conflicts) {
+        console.warn(
+          `  ${c.pervazThicknessMm}mm ${c.pieceLengthMm}: NET DB=${c.existingNetQty}/Excel=${c.excelNetQty}, cut DB=${c.existingExcelCutWidthMm}/Excel=${c.excelCutWidthMm}`,
+        );
+      }
+    }
 
     const sizeReport = await seedDoorFrameProductSizes(prisma);
     console.log(
@@ -388,6 +447,30 @@ async function main(): Promise<void> {
     );
     if (pricingReport.missingProducts.length > 0) {
       console.warn('Eksik ürünler:', pricingReport.missingProducts.join(', '));
+    }
+
+    const ayarliPricingReport = await seedAyarliPervazPricingSettings(prisma);
+    console.log(
+      `Ayarlı Pervaz fiyatlandırma seed: yeni=${ayarliPricingReport.created}, aynı=${ayarliPricingReport.unchanged}, conflict=${ayarliPricingReport.conflicts.length}, eksikGrup=${ayarliPricingReport.missingProductGroup}, eksikÜrün=${ayarliPricingReport.missingProduct}`,
+    );
+    if (ayarliPricingReport.conflicts.length > 0) {
+      console.warn('Ayarlı Pervaz fiyatlandırma conflict (overwrite yok):');
+      for (const c of ayarliPricingReport.conflicts) {
+        console.warn(`  ${c.field}: DB=${c.existingValue}, Excel=${c.seedValue}`);
+      }
+    }
+
+    const ayarliRowExceptionReport = await seedAyarliPervazPricingRowExceptions(prisma);
+    console.log(
+      `Ayarlı Pervaz satır istisnası seed: beklenen=${ayarliRowExceptionReport.totalExpected}, yeni=${ayarliRowExceptionReport.created}, aynı=${ayarliRowExceptionReport.unchanged}, conflict=${ayarliRowExceptionReport.conflicts.length}, eksikGrup=${ayarliRowExceptionReport.missingProductGroup}, eksikÜrün=${ayarliRowExceptionReport.missingProduct}`,
+    );
+    if (ayarliRowExceptionReport.conflicts.length > 0) {
+      console.warn('Ayarlı Pervaz satır istisnası conflict (overwrite yok):');
+      for (const c of ayarliRowExceptionReport.conflicts) {
+        console.warn(
+          `  ${c.thicknessMm}/${c.widthMm}/${c.lengthMm} ${c.field}: DB=${c.existingValue}, Excel=${c.seedValue}`,
+        );
+      }
     }
 
     const overrideReport = await seedDoorFramePriceOverrides(prisma);

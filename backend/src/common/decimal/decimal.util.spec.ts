@@ -39,6 +39,11 @@ describe('roundUpToWholeTl (Excel ROUNDUP(..., 0))', () => {
     expect(roundUpToWholeTl('655.0001').toString()).toBe('656');
   });
 
+  it('100.00000000000000000001 artığı 101 çıkarmaz; 100.0001 → 101', () => {
+    expect(roundUpToWholeTl('100.00000000000000000001').toString()).toBe('100');
+    expect(roundUpToWholeTl('100.0001').toString()).toBe('101');
+  });
+
   it('300.276... → 301', () => {
     expect(roundUpToWholeTl('300.2769230769230769230').toString()).toBe('301');
   });

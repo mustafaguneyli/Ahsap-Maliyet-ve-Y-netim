@@ -1,6 +1,7 @@
 import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
 import { DoorFrameVariantCode } from '../../calculation-engine/calculators/door-frame-variants';
 import { CostCalculationService } from './cost-calculation.service';
+import { AyarliPervazMdfQueryDto } from './dto/ayarli-pervaz-mdf-query.dto';
 
 @Controller('cost-calculation')
 export class CostCalculationController {
@@ -16,5 +17,14 @@ export class CostCalculationController {
       throw new BadRequestException('variant query parametresi 34_MM veya 30_MM olmalıdır.');
     }
     return this.costCalculationService.getDoorFrameMdfCosts(variant as DoorFrameVariantCode);
+  }
+
+  /**
+   * Ayarlı Pervaz — MDF + ek maliyet + kâr + ROUNDUP + satır adjustment (KDV / kart yok).
+   * GET /cost-calculation/pervaz/mdf?productCode=AYARLI_PERVAZ&thicknessMm=&widthMm=&lengthMm=
+   */
+  @Get('pervaz/mdf')
+  getAyarliPervazMdf(@Query() query: AyarliPervazMdfQueryDto) {
+    return this.costCalculationService.getAyarliPervazMdfCost(query);
   }
 }

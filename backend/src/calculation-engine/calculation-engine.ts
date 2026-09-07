@@ -7,13 +7,21 @@ import type {
   DoorFrameSizeCostResult,
   DoorFrameSizeCostWithVatResult,
 } from './calculators/door-frame-calculator';
+import {
+  AyarliPervazMdfCalculator,
+  type AyarliPervazMdfInput,
+  type AyarliPervazMdfResult,
+} from './calculators/ayarli-pervaz-mdf-calculator';
 
 /**
  * İnce yönlendirici. Mega-engine / abstract factory yoktur.
- * Phase 1 yalnızca door_frame → DoorFrameCalculator.
+ * door_frame → DoorFrameCalculator. AYARLI_PERVAZ MDF + PERVAZ extra costs → AyarliPervazMdfCalculator.
  */
 export class CalculationEngine {
-  constructor(private readonly doorFrameCalculator = new DoorFrameCalculator()) {}
+  constructor(
+    private readonly doorFrameCalculator = new DoorFrameCalculator(),
+    private readonly ayarliPervazMdfCalculator = new AyarliPervazMdfCalculator(),
+  ) {}
 
   calculateDoorFrameMdfCosts(sizes: DoorFrameSizeCostInput[]): DoorFrameMdfSizeResult[] {
     return this.doorFrameCalculator.calculateMdfCosts(sizes);
@@ -48,6 +56,10 @@ export class CalculationEngine {
       profitRate,
       cardMarkupRate,
     );
+  }
+
+  calculateAyarliPervazMdf(input: AyarliPervazMdfInput): AyarliPervazMdfResult {
+    return this.ayarliPervazMdfCalculator.calculate(input);
   }
 
   calculate(

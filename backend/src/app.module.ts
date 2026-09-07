@@ -7,6 +7,7 @@ import { HealthModule } from './modules/health/health.module';
 import { MaterialsModule } from './modules/materials/materials.module';
 import { PriceOverridesModule } from './modules/price-overrides/price-overrides.module';
 import { PricingModule } from './modules/pricing/pricing.module';
+import { PervazModule } from './modules/pervaz/pervaz.module';
 import { ProductsModule } from './modules/products/products.module';
 import { ProductionYieldsModule } from './modules/production-yields/production-yields.module';
 import { RecipesModule } from './modules/recipes/recipes.module';
@@ -26,6 +27,7 @@ import { PrismaModule } from './prisma/prisma.module';
     ProductionYieldsModule,
     ExtraCostsModule,
     PricingModule,
+    PervazModule,
     PriceOverridesModule,
     AuditModule,
     CostCalculationModule,

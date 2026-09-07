@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { assertExtraCostValueScope } from './extra-cost-value.validation';
 import { selectCurrentExtraCostValue } from './current-extra-cost-value';
 import { UpdateExtraCostValueDto } from './dto/update-extra-cost-value.dto';
+import { PERVAZ_EXTRA_COST_TYPE_ORDER } from './pervaz-extra-cost-seed';
 
 const VALUE_ENTITY_TYPE = 'ExtraCostValue';
 
@@ -22,6 +23,22 @@ export const DOOR_FRAME_EXTRA_COST_TYPE_ORDER = [
 
 export type DoorFrameExtraCostTypeCode =
   (typeof DOOR_FRAME_EXTRA_COST_TYPE_ORDER)[number];
+
+export type ExtraCostProductGroupCode = 'door_frame' | 'PERVAZ';
+
+function extraCostTypeOrderForGroup(
+  productGroupCode: string,
+): readonly string[] {
+  if (productGroupCode === 'door_frame') {
+    return DOOR_FRAME_EXTRA_COST_TYPE_ORDER;
+  }
+  if (productGroupCode === 'PERVAZ') {
+    return PERVAZ_EXTRA_COST_TYPE_ORDER;
+  }
+  throw new BadRequestException(
+    'productGroup şu an yalnızca door_frame veya PERVAZ olabilir.',
+  );
+}
 
 export type ExtraCostListItem = {
   typeId: string;
@@ -53,9 +70,7 @@ export class ExtraCostsService {
     productGroupCode: string,
     now: Date = new Date(),
   ): Promise<ExtraCostListResponse> {
-    if (productGroupCode !== 'door_frame') {
-      throw new BadRequestException('productGroup şu an yalnızca door_frame olabilir.');
-    }
+    const typeOrder = extraCostTypeOrderForGroup(productGroupCode);
 
     const group = await this.prisma.productGroup.findUnique({
       where: { code: productGroupCode },
@@ -66,7 +81,7 @@ export class ExtraCostsService {
 
     const types = await this.prisma.extraCostType.findMany({
       where: {
-        code: { in: [...DOOR_FRAME_EXTRA_COST_TYPE_ORDER] },
+        code: { in: [...typeOrder] },
         isActive: true,
       },
       include: {
@@ -85,7 +100,7 @@ export class ExtraCostsService {
     let total = toDecimal(0);
     const items: ExtraCostListItem[] = [];
 
-    for (const code of DOOR_FRAME_EXTRA_COST_TYPE_ORDER) {
+    for (const code of typeOrder) {
       const type = typeByCode.get(code);
       if (!type) {
         throw new NotFoundException(`Ek maliyet tipi bulunamadı: ${code}`);
@@ -124,12 +139,11 @@ export class ExtraCostsService {
     typeCode: string,
     dto: UpdateExtraCostValueDto,
   ): Promise<ExtraCostListResponse> {
+    const typeOrder = extraCostTypeOrderForGroup(dto.productGroup);
     const normalizedCode = typeCode.trim().toUpperCase();
-    if (
-      !(DOOR_FRAME_EXTRA_COST_TYPE_ORDER as readonly string[]).includes(normalizedCode)
-    ) {
+    if (!typeOrder.includes(normalizedCode)) {
       throw new BadRequestException(
-        `typeCode Kapı Kasası için geçersiz: ${typeCode}. Beklenen: ${DOOR_FRAME_EXTRA_COST_TYPE_ORDER.join(', ')}`,
+        `typeCode ${dto.productGroup} için geçersiz: ${typeCode}. Beklenen: ${typeOrder.join(', ')}.`,
       );
     }
 
@@ -228,7 +242,7 @@ export class ExtraCostsService {
           fieldName: 'amount',
           oldValue: open ? open.amount.toString() : null,
           newValue: amount.toFixed(4),
-          reason: `Kapı Kasası ek maliyet güncellemesi (${normalizedCode})`,
+          reason: `Ek maliyet güncellemesi (${dto.productGroup} / ${normalizedCode})`,
         },
         tx,
       );
