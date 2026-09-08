@@ -1,6 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
 import { getExcelKilcikCutWidthMm } from './excel-kilcik-cut-profile';
-import { assertKilcikTypeAllowedForThickness } from './kilcik-type.rules';
+import {
+  assertKilcikTypeAllowedForThickness,
+  KILCIK_TYPE_SPECS,
+} from './kilcik-type.rules';
 
 export type PervazKilcikYieldSourceCode = 'EXCEL_MASTER' | 'MANUAL_VERIFIED';
 
@@ -70,7 +73,10 @@ export function assertPervazKilcikYield(input: PervazKilcikYieldValidationInput)
 
   if (input.excelCutWidthMm != null) {
     requirePositiveInt('excelCutWidthMm', input.excelCutWidthMm);
-    const expected = getExcelKilcikCutWidthMm(input.pervazThicknessMm);
+    const expected =
+      input.kilcikTypeCode === 'WIDE'
+        ? KILCIK_TYPE_SPECS.WIDE.nominalWidthMm
+        : getExcelKilcikCutWidthMm(input.pervazThicknessMm);
     if (input.excelCutWidthMm !== expected) {
       throw new BadRequestException(
         `${input.pervazThicknessMm} mm Excel kılçık kesim eni ${expected} mm olmalıdır; ` +

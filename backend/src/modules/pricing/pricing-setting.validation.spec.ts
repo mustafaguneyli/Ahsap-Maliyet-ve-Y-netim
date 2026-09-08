@@ -25,6 +25,34 @@ describe('assertPricingSetting', () => {
     ).not.toThrow();
   });
 
+  it('yalnızca cardFixedSurchargeAmount dolu kaydı kabul eder', () => {
+    expect(() =>
+      assertPricingSetting({
+        productGroupId: null,
+        productId: 'p-ayarli',
+        productIsActive: true,
+        vatRate: null,
+        profitRate: '15',
+        cardMarkupRate: null,
+        cardFixedSurchargeAmount: '2',
+      }),
+    ).not.toThrow();
+  });
+
+  it('cardMarkupRate ve cardFixedSurchargeAmount aynı anda doluysa reddeder', () => {
+    expect(() =>
+      assertPricingSetting({
+        productGroupId: null,
+        productId: 'p-34',
+        productIsActive: true,
+        vatRate: '0',
+        profitRate: '20',
+        cardMarkupRate: '20',
+        cardFixedSurchargeAmount: '2',
+      }),
+    ).toThrow(BadRequestException);
+  });
+
   it('yalnızca aktif product kapsamını kabul eder', () => {
     expect(() =>
       assertPricingSetting({

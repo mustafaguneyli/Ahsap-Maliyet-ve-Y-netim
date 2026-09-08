@@ -9,6 +9,10 @@ import {
 } from './fixtures/ayarli-pervaz-excel-mdf.fixture';
 import { AYARLI_PERVAZ_PRICING_SEED } from '../../modules/pricing/ayarli-pervaz-pricing-seed';
 import { AYARLI_PERVAZ_PRICING_ROW_EXCEPTION_SEEDS } from '../../modules/pricing/ayarli-pervaz-pricing-row-exception-seed';
+import {
+  AYARLI_PERVAZ_CARD_SALE_ENABLED_SEEDS,
+  AYARLI_PERVAZ_CARD_SALE_UNLISTED_MEASURES,
+} from '../../modules/pricing/ayarli-pervaz-card-sale-enabled-seed';
 
 const excelExtraCosts = {
   cutting: AYARLI_PERVAZ_EXCEL_EXTRA_COSTS.cutting,
@@ -656,6 +660,7 @@ describe('Ayarlı Pervaz Excel MDF karşılaştırması (20 satır)', () => {
     expect(result.pricing).not.toHaveProperty('vatAmount');
     expect(result.pricing).not.toHaveProperty('costWithVat');
     expect(result.pricing).not.toHaveProperty('finalSalePrice');
+    expect(result.pricing).not.toHaveProperty('cardMarkupRate');
   });
 
   it('ortak roundUpToWholeTl: near-whole artığı 101 yapmaz; 100.0001 → 101', () => {
@@ -700,5 +705,149 @@ describe('Ayarlı Pervaz Excel MDF karşılaştırması (20 satır)', () => {
     expect(result.pricing.roundedSalePrice).toBe('178');
     expect(result.pricing.publishedSalePrice).toBe('178');
     expect(result.pricing.adjustmentAmount).toBeNull();
+  });
+
+  function isAyarliCardListed(row: {
+    thicknessMm: number;
+    widthMm: number;
+    lengthMm: number;
+  }): boolean {
+    return AYARLI_PERVAZ_CARD_SALE_ENABLED_SEEDS.some(
+      (seed) =>
+        seed.thicknessMm === row.thicknessMm &&
+        seed.widthMm === row.widthMm &&
+        seed.lengthMm === row.lengthMm,
+    );
+  }
+
+  it.each(AYARLI_PERVAZ_EXCEL_MDF_ROWS)(
+    '$thicknessMm mm $widthMm×$lengthMm kart kapsamı Excel nakit+2 veya null',
+    (row) => {
+      const result = calculator.calculate({
+        productCode: 'AYARLI_PERVAZ',
+        thicknessMm: row.thicknessMm,
+        widthMm: row.widthMm,
+        lengthMm: row.lengthMm,
+        mainPiece: {
+          rawMaterialCode: row.mainRawMaterialCode,
+          sheetPriceType: 'CARD_INSTALLMENT',
+          sheetPrice: row.mainCardPrice,
+          netQty: row.mainNetQty,
+          yieldSource: 'EXCEL_MASTER',
+        },
+        kilcik: {
+          rawMaterialCode: 'MDF-4-2200X2800-ZIMPARALI',
+          sheetPriceType: 'CARD_INSTALLMENT',
+          sheetPrice: AYARLI_PERVAZ_KILCIK_CARD_PRICE,
+          netQty: row.kilcikNetQty,
+          yieldSource: 'EXCEL_MASTER',
+        },
+        extraCosts: excelExtraCosts,
+        profitRate: excelProfitRate(row),
+        adjustmentAmount: excelAdjustmentAmount(row),
+        cardFixedSurchargeAmount: '2',
+        cardSaleEnabled: isAyarliCardListed(row),
+      });
+
+      expect(result.pricing.publishedSalePrice).toBe(row.excelFinalSalePrice);
+      if (isAyarliCardListed(row)) {
+        expect(result.pricing.cardSaleAvailable).toBe(true);
+        expect(result.pricing.cardPricingType).toBe('FIXED_SURCHARGE');
+        expect(result.pricing.cardSalePrice).toBe(
+          toDecimal(result.pricing.publishedSalePrice).plus('2').toFixed(),
+        );
+      } else {
+        expect(result.pricing.cardSaleAvailable).toBe(false);
+        expect(result.pricing.cardPricingType).toBe('NONE');
+        expect(result.pricing.cardSalePrice).toBeNull();
+      }
+    },
+  );
+
+  it('FİYAT LİSTESİ 12 kartlı / 8 liste dışı ayrımını korur', () => {
+    expect(AYARLI_PERVAZ_CARD_SALE_ENABLED_SEEDS).toHaveLength(12);
+    expect(AYARLI_PERVAZ_CARD_SALE_UNLISTED_MEASURES).toHaveLength(8);
+  });
+
+  it('18 mm 10×220: nakit 179, kart 181; +1 karta dahildir; 178+2 yapılmaz', () => {
+    const row = AYARLI_PERVAZ_EXCEL_MDF_ROWS.find(
+      (item) => item.thicknessMm === 18 && item.widthMm === 100 && item.lengthMm === 2200,
+    )!;
+    const result = calculator.calculate({
+      productCode: 'AYARLI_PERVAZ',
+      thicknessMm: row.thicknessMm,
+      widthMm: row.widthMm,
+      lengthMm: row.lengthMm,
+      mainPiece: {
+        rawMaterialCode: row.mainRawMaterialCode,
+        sheetPriceType: 'CARD_INSTALLMENT',
+        sheetPrice: row.mainCardPrice,
+        netQty: row.mainNetQty,
+        yieldSource: 'EXCEL_MASTER',
+      },
+      kilcik: {
+        rawMaterialCode: 'MDF-4-2200X2800-ZIMPARALI',
+        sheetPriceType: 'CARD_INSTALLMENT',
+        sheetPrice: AYARLI_PERVAZ_KILCIK_CARD_PRICE,
+        netQty: row.kilcikNetQty,
+        yieldSource: 'EXCEL_MASTER',
+      },
+      extraCosts: excelExtraCosts,
+      profitRate: '15',
+      adjustmentAmount: '1',
+      cardFixedSurchargeAmount: '2',
+      cardSaleEnabled: true,
+    });
+    expect(result.pricing.roundedSalePrice).toBe('178');
+    expect(result.pricing.publishedSalePrice).toBe('179');
+    expect(result.pricing.cardSalePrice).toBe('181');
+    expect(result.pricing.cardSalePrice).not.toBe('180');
+    expect(result.pricing.cardSalePrice).toBe(
+      toDecimal(result.pricing.publishedSalePrice).plus('2').toFixed(),
+    );
+  });
+
+  it('cardFixed 2→3 yalnız kartı +1 değiştirir; nakit aynı kalır', () => {
+    const row = AYARLI_PERVAZ_EXCEL_MDF_ROWS.find(
+      (item) => item.thicknessMm === 18 && item.widthMm === 100 && item.lengthMm === 2200,
+    )!;
+    const input = {
+      productCode: 'AYARLI_PERVAZ' as const,
+      thicknessMm: row.thicknessMm,
+      widthMm: row.widthMm,
+      lengthMm: row.lengthMm,
+      mainPiece: {
+        rawMaterialCode: row.mainRawMaterialCode,
+        sheetPriceType: 'CARD_INSTALLMENT' as const,
+        sheetPrice: row.mainCardPrice,
+        netQty: row.mainNetQty,
+        yieldSource: 'EXCEL_MASTER' as const,
+      },
+      kilcik: {
+        rawMaterialCode: 'MDF-4-2200X2800-ZIMPARALI',
+        sheetPriceType: 'CARD_INSTALLMENT' as const,
+        sheetPrice: AYARLI_PERVAZ_KILCIK_CARD_PRICE,
+        netQty: row.kilcikNetQty,
+        yieldSource: 'EXCEL_MASTER' as const,
+      },
+      extraCosts: excelExtraCosts,
+      profitRate: '15',
+      adjustmentAmount: '1',
+      cardSaleEnabled: true,
+    };
+    const two = calculator.calculate({ ...input, cardFixedSurchargeAmount: '2' });
+    const three = calculator.calculate({ ...input, cardFixedSurchargeAmount: '3' });
+    expect(two.pricing.publishedSalePrice).toBe('179');
+    expect(three.pricing.publishedSalePrice).toBe(two.pricing.publishedSalePrice);
+    expect(two.pricing.cardSalePrice).toBe('181');
+    expect(three.pricing.cardSalePrice).toBe('182');
+  });
+
+  it('Pervaz calculator cardMarkupRate kullanmaz', () => {
+    const src = readFileSync(join(__dirname, 'ayarli-pervaz-mdf-calculator.ts'), 'utf8');
+    const helper = readFileSync(join(__dirname, 'pervaz-card-sale.ts'), 'utf8');
+    expect(src).not.toMatch(/cardMarkupRate/);
+    expect(helper).not.toMatch(/cardMarkupRate/);
+    expect(helper).not.toMatch(/roundUpToWholeTl/);
   });
 });

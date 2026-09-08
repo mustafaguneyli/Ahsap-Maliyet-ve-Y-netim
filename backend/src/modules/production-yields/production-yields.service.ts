@@ -144,6 +144,7 @@ export class ProductionYieldsService {
     if (isActive) {
       const existingActive = await this.prisma.productionYield.findFirst({
         where: {
+          productId: null,
           rawMaterialId: dto.rawMaterialId,
           pieceWidthMm: dto.pieceWidthMm,
           pieceLengthMm: dto.pieceLengthMm,
@@ -162,6 +163,7 @@ export class ProductionYieldsService {
       const created = await this.prisma.$transaction(async (tx) => {
         const row = await tx.productionYield.create({
           data: {
+            productId: null,
             rawMaterialId: dto.rawMaterialId,
             pieceWidthMm: dto.pieceWidthMm,
             pieceLengthMm: dto.pieceLengthMm,
@@ -244,6 +246,7 @@ export class ProductionYieldsService {
     const otherActive = await this.prisma.productionYield.findFirst({
       where: {
         id: { not: id },
+        productId: existing.productId,
         rawMaterialId: existing.rawMaterialId,
         pieceWidthMm: existing.pieceWidthMm,
         pieceLengthMm: existing.pieceLengthMm,
@@ -292,6 +295,7 @@ export class ProductionYieldsService {
 
         const row = await tx.productionYield.create({
           data: {
+            productId: existing.productId,
             rawMaterialId: existing.rawMaterialId,
             pieceWidthMm: existing.pieceWidthMm,
             pieceLengthMm: existing.pieceLengthMm,

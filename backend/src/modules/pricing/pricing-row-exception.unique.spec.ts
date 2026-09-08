@@ -113,6 +113,24 @@ describe('PricingRowException unique / CHECK', () => {
     expect(current.profitRate?.toString()).toBe('22');
   });
 
+  it('yalnız cardSaleEnabled=true CHECK kabul eder', async () => {
+    const created = await prisma.pricingRowException.create({
+      data: {
+        productId,
+        thicknessMm: SENTINEL_THICKNESS_MM,
+        widthMm: SENTINEL_WIDTH_MM,
+        lengthMm: SENTINEL_LENGTH_MM,
+        profitRate: null,
+        adjustmentAmount: null,
+        cardSaleEnabled: true,
+        isActive: true,
+        effectiveFrom: EFFECTIVE_FROM,
+        effectiveTo: null,
+      },
+    });
+    expect(created.cardSaleEnabled).toBe(true);
+  });
+
   it('profitRate ve adjustmentAmount ikisi de null ise CHECK reddeder', async () => {
     await expect(
       prisma.pricingRowException.create({

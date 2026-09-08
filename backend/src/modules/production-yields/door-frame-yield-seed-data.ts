@@ -216,6 +216,7 @@ export async function seedDoorFrameProductionYields(
 
     const active = await prisma.productionYield.findFirst({
       where: {
+        productId: null,
         rawMaterialId: materialId,
         pieceWidthMm: row.pieceWidthMm,
         pieceLengthMm: row.pieceLengthMm,
@@ -240,6 +241,7 @@ export async function seedDoorFrameProductionYields(
 
     await prisma.productionYield.create({
       data: {
+        productId: null,
         rawMaterialId: materialId,
         pieceWidthMm: row.pieceWidthMm,
         pieceLengthMm: row.pieceLengthMm,

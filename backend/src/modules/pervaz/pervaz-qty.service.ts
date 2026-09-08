@@ -17,20 +17,30 @@ export class PervazQtyService {
    * Hesaplanan öneri kaydedilmez.
    */
   async resolvePervazPiece(input: {
+    productId?: string;
     rawMaterialId: string;
     sheetWidthMm: number;
     sheetLengthMm: number;
     pieceWidthMm: number;
     pieceLengthMm: number;
   }): Promise<PervazQtyResolution> {
-    const master = await this.prisma.productionYield.findFirst({
-      where: {
-        rawMaterialId: input.rawMaterialId,
-        pieceWidthMm: input.pieceWidthMm,
-        pieceLengthMm: input.pieceLengthMm,
-        isActive: true,
-      },
-    });
+    const context = {
+      rawMaterialId: input.rawMaterialId,
+      pieceWidthMm: input.pieceWidthMm,
+      pieceLengthMm: input.pieceLengthMm,
+      isActive: true,
+    } as const;
+    const productMaster = input.productId
+      ? await this.prisma.productionYield.findFirst({
+          where: { ...context, productId: input.productId },
+        })
+      : null;
+    const genericMaster = productMaster
+      ? null
+      : await this.prisma.productionYield.findFirst({
+          where: { ...context, productId: null },
+        });
+    const master = productMaster ?? genericMaster;
 
     return resolvePervazPieceQty({
       sheetWidthMm: input.sheetWidthMm,

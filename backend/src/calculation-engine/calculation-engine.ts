@@ -12,6 +12,11 @@ import {
   type AyarliPervazMdfInput,
   type AyarliPervazMdfResult,
 } from './calculators/ayarli-pervaz-mdf-calculator';
+import {
+  DekoratifPervazCalculator,
+  type DekoratifPervazInput,
+  type DekoratifPervazResult,
+} from './calculators/dekoratif-pervaz-calculator';
 
 /**
  * İnce yönlendirici. Mega-engine / abstract factory yoktur.
@@ -21,6 +26,7 @@ export class CalculationEngine {
   constructor(
     private readonly doorFrameCalculator = new DoorFrameCalculator(),
     private readonly ayarliPervazMdfCalculator = new AyarliPervazMdfCalculator(),
+    private readonly dekoratifPervazCalculator = new DekoratifPervazCalculator(),
   ) {}
 
   calculateDoorFrameMdfCosts(sizes: DoorFrameSizeCostInput[]): DoorFrameMdfSizeResult[] {
@@ -60,6 +66,12 @@ export class CalculationEngine {
 
   calculateAyarliPervazMdf(input: AyarliPervazMdfInput): AyarliPervazMdfResult {
     return this.ayarliPervazMdfCalculator.calculate(input);
+  }
+
+  calculateDekoratifPervaz(
+    input: DekoratifPervazInput,
+  ): DekoratifPervazResult {
+    return this.dekoratifPervazCalculator.calculate(input);
   }
 
   calculate(

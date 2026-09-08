@@ -30,6 +30,11 @@ export type AyarliPervazAdjustmentResolution = {
   source: AyarliPervazAdjustmentSource;
 };
 
+export type CardFixedHolder = {
+  isActive: boolean;
+  cardFixedSurchargeAmount?: { toString(): string } | string | null;
+};
+
 /**
  * ExtraCostValue / ham madde fiyatı ile aynı dönem kuralı:
  * isActive AND effectiveFrom <= now AND (effectiveTo IS NULL OR effectiveTo > now)
@@ -91,6 +96,7 @@ function firstActiveProfitRate(settings: ProfitRateHolder[]): string | null {
  */
 export function resolveAyarliPervazProfitRate(input: {
   now: Date;
+  productCode?: string;
   rowExceptions: Array<EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }>;
   productSettings: ProfitRateHolder[];
   groupSettings?: ProfitRateHolder[];
@@ -119,7 +125,32 @@ export function resolveAyarliPervazProfitRate(input: {
     return { profitRate: globalProfit, source: 'GLOBAL_PRICING_SETTING' };
   }
 
-  throw new NotFoundException('AYARLI_PERVAZ için şu an geçerli profitRate bulunamadı.');
+  throw new NotFoundException(
+    `${input.productCode ?? 'AYARLI_PERVAZ'} için şu an geçerli profitRate bulunamadı.`,
+  );
+}
+
+export function resolveDekoratifPervazPremiumRate(input: {
+  now: Date;
+  rowExceptions: Array<
+    EffectivePeriodRecord & {
+      decorativePremiumRate: { toString(): string } | string | null;
+    }
+  >;
+}): string {
+  const currentException = selectCurrentEffectivePeriod(
+    input.rowExceptions,
+    input.now,
+  );
+  const rate = currentException
+    ? readNonNegativeProfitRate(currentException.decorativePremiumRate)
+    : null;
+  if (rate == null) {
+    throw new NotFoundException(
+      'DEKORATIF_PERVAZ için şu an geçerli decorativePremiumRate bulunamadı.',
+    );
+  }
+  return rate;
 }
 
 function readAdjustmentAmount(
@@ -152,4 +183,39 @@ export function resolveAyarliPervazAdjustment(input: {
     return { adjustmentAmount, source: 'ROW_EXCEPTION' };
   }
   return { adjustmentAmount: null, source: 'NONE' };
+}
+
+export function resolveAyarliPervazCardSaleEnabled(input: {
+  now: Date;
+  rowExceptions: Array<EffectivePeriodRecord & { cardSaleEnabled?: boolean | null }>;
+}): boolean {
+  const currentException = selectCurrentEffectivePeriod(input.rowExceptions, input.now);
+  return currentException?.cardSaleEnabled === true;
+}
+
+/**
+ * Pervaz kart sabit TL: yalnız product-level PricingSetting.
+ * Yoksa veya NULL ise kart yayınlanmaz (sessiz 0 yok).
+ */
+export function resolvePervazCardFixedSurchargeAmount(
+  productSettings: CardFixedHolder[],
+): string | null {
+  for (const setting of productSettings) {
+    if (!setting.isActive) {
+      continue;
+    }
+    const raw = setting.cardFixedSurchargeAmount;
+    if (raw == null || raw === '') {
+      continue;
+    }
+    const value = typeof raw === 'string' ? raw : raw.toString();
+    const amount = toDecimal(value);
+    if (amount.isNegative()) {
+      throw new BadRequestException(
+        `cardFixedSurchargeAmount negatif olamaz; verilen değer: ${value}.`,
+      );
+    }
+    return amount.toFixed();
+  }
+  return null;
 }

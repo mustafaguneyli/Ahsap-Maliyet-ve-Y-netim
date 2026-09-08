@@ -1,7 +1,10 @@
 import { NotFoundException } from '@nestjs/common';
 import {
   resolveAyarliPervazAdjustment,
+  resolveAyarliPervazCardSaleEnabled,
   resolveAyarliPervazProfitRate,
+  resolveDekoratifPervazPremiumRate,
+  resolvePervazCardFixedSurchargeAmount,
   selectCurrentEffectivePeriod,
 } from './ayarli-pervaz-profit-rate.resolver';
 
@@ -215,5 +218,82 @@ describe('resolveAyarliPervazAdjustment', () => {
         ],
       }),
     ).toEqual({ adjustmentAmount: null, source: 'NONE' });
+  });
+});
+
+describe('resolveDekoratifPervazPremiumRate', () => {
+  it.each([
+    ['50', '50'],
+    ['75.0000', '75'],
+  ])('aktif Decimal dekoratif farkı çözer: %s', (raw, expected) => {
+    expect(
+      resolveDekoratifPervazPremiumRate({
+        now,
+        rowExceptions: [
+          {
+            isActive: true,
+            effectiveFrom: from,
+            effectiveTo: null,
+            decorativePremiumRate: { toString: () => raw },
+          },
+        ],
+      }),
+    ).toBe(expected);
+  });
+
+  it('oran yoksa sessiz fallback üretmez', () => {
+    expect(() =>
+      resolveDekoratifPervazPremiumRate({
+        now,
+        rowExceptions: [],
+      }),
+    ).toThrow(NotFoundException);
+  });
+});
+
+describe('resolveAyarliPervazCardSaleEnabled', () => {
+  it('yalnız TRUE kaydı kart kapsamına alır', () => {
+    expect(
+      resolveAyarliPervazCardSaleEnabled({
+        now,
+        rowExceptions: [
+          {
+            isActive: true,
+            effectiveFrom: from,
+            effectiveTo: null,
+            cardSaleEnabled: true,
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      resolveAyarliPervazCardSaleEnabled({
+        now,
+        rowExceptions: [
+          {
+            isActive: true,
+            effectiveFrom: from,
+            effectiveTo: null,
+            cardSaleEnabled: null,
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(resolveAyarliPervazCardSaleEnabled({ now, rowExceptions: [] })).toBe(false);
+  });
+});
+
+describe('resolvePervazCardFixedSurchargeAmount', () => {
+  it('aktif product setting’den sabit TL okur; yoksa null', () => {
+    expect(
+      resolvePervazCardFixedSurchargeAmount([
+        { isActive: true, cardFixedSurchargeAmount: { toString: () => '2' } },
+      ]),
+    ).toBe('2');
+    expect(
+      resolvePervazCardFixedSurchargeAmount([
+        { isActive: true, cardFixedSurchargeAmount: null },
+      ]),
+    ).toBeNull();
   });
 });

@@ -14,6 +14,7 @@ describe('seedDoorFramePricingSettings', () => {
       vatRate: { toString(): string };
       profitRate: { toString(): string };
       cardMarkupRate: { toString(): string };
+      cardFixedSurchargeAmount: null;
     }> = [];
 
     const prisma = {
@@ -51,6 +52,8 @@ describe('seedDoorFramePricingSettings', () => {
     expect(DOOR_FRAME_PRICING_SEEDS).toHaveLength(2);
     expect(created[0].cardMarkupRate.toString()).toBe('20');
     expect(created[1].cardMarkupRate.toString()).toBe('20');
+    expect(created[0].cardFixedSurchargeAmount).toBeNull();
+    expect(created[1].cardFixedSurchargeAmount).toBeNull();
   });
 
   it('aktif kayıtta cardMarkupRate null ise vat/profit korunarak 20 backfill eder', async () => {
@@ -84,6 +87,7 @@ describe('seedDoorFramePricingSettings', () => {
     expect(prisma.pricingSetting.create.mock.calls[0][0].data.cardMarkupRate.toString()).toBe(
       '20',
     );
+    expect(prisma.pricingSetting.create.mock.calls[0][0].data.cardFixedSurchargeAmount).toBeNull();
   });
 
   it('cardMarkupRate doluysa dokunmaz', async () => {

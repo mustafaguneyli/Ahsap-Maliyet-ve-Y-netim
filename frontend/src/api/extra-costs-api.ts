@@ -19,12 +19,14 @@ export type ExtraCostListResponse = {
 };
 
 export type UpdateExtraCostValueInput = {
-  productGroup: 'door_frame';
+  productGroup: 'door_frame' | 'PERVAZ';
   amount: string;
   effectiveFrom: string;
 };
 
-export function listExtraCosts(productGroup: 'door_frame' = 'door_frame') {
+export function listExtraCosts(
+  productGroup: 'door_frame' | 'PERVAZ' = 'door_frame',
+) {
   return apiRequest<ExtraCostListResponse>(
     `/extra-costs?productGroup=${encodeURIComponent(productGroup)}`,
   );

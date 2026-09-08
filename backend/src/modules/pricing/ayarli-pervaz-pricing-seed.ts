@@ -7,20 +7,20 @@ const PRODUCT_GROUP_CODE = 'PERVAZ';
 const PRODUCT_CODE = 'AYARLI_PERVAZ';
 
 /**
- * Excel AYARLI_PERVAZ default kâr oranı. Product-level.
- * vatRate / cardMarkupRate bu aşamada NULL (KDV ve kart yok).
- * Grup-level yazılmaz; Dekoratif ürünlere sızmaz.
- * 16 mm 10×250 %20 ve +1 bu seed’de yoktur.
+ * Excel AYARLI_PERVAZ default kâr + FİYAT LİSTESİ kart kuralı (nakit + 2 TL).
+ * cardMarkupRate yüzde değildir; Kapı Kasası %20 buraya yazılmaz.
  */
 export const AYARLI_PERVAZ_PRICING_SEED = {
   profitRate: '15',
   vatRate: null,
   cardMarkupRate: null,
+  cardFixedSurchargeAmount: '2',
 } as const;
 
 export type AyarliPervazPricingSeedReport = {
   created: number;
   unchanged: number;
+  cardFixedBackfilled: number;
   conflicts: Array<{
     field: string;
     seedValue: string;
@@ -53,6 +53,7 @@ export async function seedAyarliPervazPricingSettings(
   const report: AyarliPervazPricingSeedReport = {
     created: 0,
     unchanged: 0,
+    cardFixedBackfilled: 0,
     conflicts: [],
     missingProductGroup: false,
     missingProduct: false,
@@ -90,10 +91,54 @@ export async function seedAyarliPervazPricingSettings(
   if (active) {
     const sameProfit = rateEquals(active.profitRate, AYARLI_PERVAZ_PRICING_SEED.profitRate);
     const sameVat = rateEquals(active.vatRate, AYARLI_PERVAZ_PRICING_SEED.vatRate);
-    const sameCard = rateEquals(active.cardMarkupRate, AYARLI_PERVAZ_PRICING_SEED.cardMarkupRate);
+    const sameCardMarkup = rateEquals(
+      active.cardMarkupRate,
+      AYARLI_PERVAZ_PRICING_SEED.cardMarkupRate,
+    );
+    const sameCardFixed = rateEquals(
+      active.cardFixedSurchargeAmount,
+      AYARLI_PERVAZ_PRICING_SEED.cardFixedSurchargeAmount,
+    );
 
-    if (sameProfit && sameVat && sameCard) {
+    if (sameProfit && sameVat && sameCardMarkup && sameCardFixed) {
       report.unchanged += 1;
+      return report;
+    }
+
+    if (
+      active.cardFixedSurchargeAmount == null &&
+      active.cardMarkupRate == null
+    ) {
+      const vatRate = active.vatRate?.toString() ?? null;
+      const profitRate =
+        active.profitRate?.toString() ?? AYARLI_PERVAZ_PRICING_SEED.profitRate;
+      assertPricingSetting({
+        productGroupId: null,
+        productId: product.id,
+        vatRate,
+        profitRate,
+        cardMarkupRate: null,
+        cardFixedSurchargeAmount: AYARLI_PERVAZ_PRICING_SEED.cardFixedSurchargeAmount,
+        productIsActive: product.isActive,
+      });
+      await prisma.pricingSetting.update({
+        where: { id: active.id },
+        data: { isActive: false },
+      });
+      await prisma.pricingSetting.create({
+        data: {
+          productGroupId: null,
+          productId: product.id,
+          vatRate: vatRate == null ? null : new Decimal(vatRate),
+          profitRate: new Decimal(profitRate),
+          cardMarkupRate: null,
+          cardFixedSurchargeAmount: new Decimal(
+            AYARLI_PERVAZ_PRICING_SEED.cardFixedSurchargeAmount,
+          ),
+          isActive: true,
+        },
+      });
+      report.cardFixedBackfilled += 1;
       return report;
     }
 
@@ -111,11 +156,18 @@ export async function seedAyarliPervazPricingSettings(
         existingValue: rateLabel(active.vatRate),
       });
     }
-    if (!sameCard) {
+    if (!sameCardMarkup) {
       report.conflicts.push({
         field: 'cardMarkupRate',
         seedValue: 'null',
         existingValue: rateLabel(active.cardMarkupRate),
+      });
+    }
+    if (!sameCardFixed) {
+      report.conflicts.push({
+        field: 'cardFixedSurchargeAmount',
+        seedValue: AYARLI_PERVAZ_PRICING_SEED.cardFixedSurchargeAmount,
+        existingValue: rateLabel(active.cardFixedSurchargeAmount),
       });
     }
     return report;
@@ -127,6 +179,7 @@ export async function seedAyarliPervazPricingSettings(
     vatRate: AYARLI_PERVAZ_PRICING_SEED.vatRate,
     profitRate: AYARLI_PERVAZ_PRICING_SEED.profitRate,
     cardMarkupRate: AYARLI_PERVAZ_PRICING_SEED.cardMarkupRate,
+    cardFixedSurchargeAmount: AYARLI_PERVAZ_PRICING_SEED.cardFixedSurchargeAmount,
     productIsActive: product.isActive,
   });
 
@@ -137,6 +190,9 @@ export async function seedAyarliPervazPricingSettings(
       vatRate: null,
       profitRate: new Decimal(AYARLI_PERVAZ_PRICING_SEED.profitRate),
       cardMarkupRate: null,
+      cardFixedSurchargeAmount: new Decimal(
+        AYARLI_PERVAZ_PRICING_SEED.cardFixedSurchargeAmount,
+      ),
       isActive: true,
     },
   });

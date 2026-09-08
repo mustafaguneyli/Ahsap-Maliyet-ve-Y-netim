@@ -105,6 +105,7 @@ export async function seedAyarliPervazProductionYields(
 
     const active = await prisma.productionYield.findFirst({
       where: {
+        productId: null,
         rawMaterialId: materialId,
         pieceWidthMm: row.pieceWidthMm,
         pieceLengthMm: row.pieceLengthMm,
@@ -129,6 +130,7 @@ export async function seedAyarliPervazProductionYields(
 
     await prisma.productionYield.create({
       data: {
+        productId: null,
         rawMaterialId: materialId,
         pieceWidthMm: row.pieceWidthMm,
         pieceLengthMm: row.pieceLengthMm,

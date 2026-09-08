@@ -6,13 +6,20 @@ import { seedDoorFramePriceOverrides } from '../src/modules/price-overrides/door
 import { seedDoorFramePricingSettings } from '../src/modules/pricing/door-frame-pricing-seed';
 import { seedAyarliPervazPricingSettings } from '../src/modules/pricing/ayarli-pervaz-pricing-seed';
 import { seedAyarliPervazPricingRowExceptions } from '../src/modules/pricing/ayarli-pervaz-pricing-row-exception-seed';
+import { seedAyarliPervazCardSaleEnabled } from '../src/modules/pricing/ayarli-pervaz-card-sale-enabled-seed';
+import { seedDekoratifPervazPricing } from '../src/modules/pricing/dekoratif-pervaz-pricing-seed';
+import { seedDekoratifGenisKilcikPricing } from '../src/modules/pricing/dekoratif-genis-kilcik-pricing-seed';
 import { seedDoorFrameProducts } from '../src/modules/products/door-frame-product-seed';
 import { seedDoorFrameProductSizes } from '../src/modules/products/door-frame-product-size-seed';
 import { seedPervazProducts } from '../src/modules/products/pervaz-product-seed';
 import { seedKilcikTypes } from '../src/modules/pervaz/kilcik-type-seed';
 import { seedAyarliPervazKilcikYields } from '../src/modules/pervaz/ayarli-pervaz-kilcik-yield-seed';
+import { seedDekoratifPervazKilcikYields } from '../src/modules/pervaz/dekoratif-pervaz-kilcik-yield-seed';
+import { seedDekoratifGenisKilcikYields } from '../src/modules/pervaz/dekoratif-genis-kilcik-yield-seed';
 import { seedDoorFrameProductionYields } from '../src/modules/production-yields/door-frame-yield-seed-data';
 import { seedAyarliPervazProductionYields } from '../src/modules/production-yields/pervaz-ayarli-yield-seed-data';
+import { seedDekoratifPervazProductionYields } from '../src/modules/production-yields/pervaz-dekoratif-yield-seed-data';
+import { seedDekoratifGenisKilcikProductionYields } from '../src/modules/production-yields/pervaz-dekoratif-genis-kilcik-yield-seed-data';
 
 /**
  * DEMPAŞ 2026-3 Revize Ham MDF fiyat tablosu.
@@ -390,6 +397,12 @@ async function main(): Promise<void> {
       }
     }
 
+    const dekoratifPervazYieldReport =
+      await seedDekoratifPervazProductionYields(prisma);
+    console.log(
+      `Dekoratif Pervaz NET seed: beklenen=${dekoratifPervazYieldReport.totalExpected}, yeni=${dekoratifPervazYieldReport.created}, aynı=${dekoratifPervazYieldReport.unchanged}, conflict=${dekoratifPervazYieldReport.conflicts.length}, eksikHamMadde=${dekoratifPervazYieldReport.missingMaterials.length}`,
+    );
+
     const extraCostReport = await seedDoorFrameExtraCosts(prisma);
     console.log(
       `Kapı Kasası ek maliyet seed: grupYeni=${extraCostReport.productGroupCreated}, tipYeni=${extraCostReport.typesCreated}, değerYeni=${extraCostReport.valuesCreated}, mevcutAtlandı=${extraCostReport.valuesSkippedExisting}`,
@@ -404,6 +417,20 @@ async function main(): Promise<void> {
     console.log(
       `Pervaz ürün seed: grupYeni=${pervazProductReport.productGroupCreated}, ürünYeni=${pervazProductReport.productsCreated}, mevcutAtlandı=${pervazProductReport.productsSkippedExisting}`,
     );
+
+    const genisMainYieldReport =
+      await seedDekoratifGenisKilcikProductionYields(prisma);
+    console.log(
+      `Dekoratif Geniş Kılçık ana NET seed: beklenen=${genisMainYieldReport.totalExpected}, yeni=${genisMainYieldReport.created}, aynı=${genisMainYieldReport.unchanged}, conflict=${genisMainYieldReport.conflicts.length}, eksikÜrün=${genisMainYieldReport.missingProduct}, eksikHamMadde=${genisMainYieldReport.missingMaterial}`,
+    );
+    if (genisMainYieldReport.conflicts.length > 0) {
+      console.warn('Dekoratif Geniş Kılçık ana NET conflict (overwrite yok):');
+      for (const c of genisMainYieldReport.conflicts) {
+        console.warn(
+          `  ${c.pieceWidthMm}×${c.pieceLengthMm}: NET DB=${c.existingNetQty}, Excel=${c.excelNetQty}`,
+        );
+      }
+    }
 
     const pervazExtraCostReport = await seedPervazExtraCosts(prisma);
     console.log(
@@ -436,6 +463,18 @@ async function main(): Promise<void> {
       }
     }
 
+    const dekoratifKilcikYieldReport =
+      await seedDekoratifPervazKilcikYields(prisma);
+    console.log(
+      `Dekoratif Pervaz kılçık NET seed: beklenen=${dekoratifKilcikYieldReport.totalExpected}, yeni=${dekoratifKilcikYieldReport.created}, aynı=${dekoratifKilcikYieldReport.unchanged}, conflict=${dekoratifKilcikYieldReport.conflicts}, eksikÜrün=${dekoratifKilcikYieldReport.missingProduct}, eksikHamMadde=${dekoratifKilcikYieldReport.missingMaterial}`,
+    );
+
+    const genisKilcikYieldReport =
+      await seedDekoratifGenisKilcikYields(prisma);
+    console.log(
+      `Dekoratif Geniş Kılçık NET seed: beklenen=${genisKilcikYieldReport.totalExpected}, yeni=${genisKilcikYieldReport.created}, aynı=${genisKilcikYieldReport.unchanged}, conflict=${genisKilcikYieldReport.conflicts}, eksikÜrün=${genisKilcikYieldReport.missingProduct}, eksikHamMadde=${genisKilcikYieldReport.missingMaterial}, eksikWIDE=${genisKilcikYieldReport.missingWideType}`,
+    );
+
     const sizeReport = await seedDoorFrameProductSizes(prisma);
     console.log(
       `Kapı Kasası ölçü seed: yeni=${sizeReport.created}, mevcutAtlandı=${sizeReport.skippedExisting}`,
@@ -451,7 +490,7 @@ async function main(): Promise<void> {
 
     const ayarliPricingReport = await seedAyarliPervazPricingSettings(prisma);
     console.log(
-      `Ayarlı Pervaz fiyatlandırma seed: yeni=${ayarliPricingReport.created}, aynı=${ayarliPricingReport.unchanged}, conflict=${ayarliPricingReport.conflicts.length}, eksikGrup=${ayarliPricingReport.missingProductGroup}, eksikÜrün=${ayarliPricingReport.missingProduct}`,
+      `Ayarlı Pervaz fiyatlandırma seed: yeni=${ayarliPricingReport.created}, aynı=${ayarliPricingReport.unchanged}, kartSabitDolduruldu=${ayarliPricingReport.cardFixedBackfilled}, conflict=${ayarliPricingReport.conflicts.length}, eksikGrup=${ayarliPricingReport.missingProductGroup}, eksikÜrün=${ayarliPricingReport.missingProduct}`,
     );
     if (ayarliPricingReport.conflicts.length > 0) {
       console.warn('Ayarlı Pervaz fiyatlandırma conflict (overwrite yok):');
@@ -472,6 +511,30 @@ async function main(): Promise<void> {
         );
       }
     }
+
+    const ayarliCardEnabledReport = await seedAyarliPervazCardSaleEnabled(prisma);
+    console.log(
+      `Ayarlı Pervaz kart kapsamı seed: beklenen=${ayarliCardEnabledReport.totalExpected}, yeni=${ayarliCardEnabledReport.created}, aynı=${ayarliCardEnabledReport.unchanged}, dolduruldu=${ayarliCardEnabledReport.backfilled}, conflict=${ayarliCardEnabledReport.conflicts.length}, eksikGrup=${ayarliCardEnabledReport.missingProductGroup}, eksikÜrün=${ayarliCardEnabledReport.missingProduct}`,
+    );
+    if (ayarliCardEnabledReport.conflicts.length > 0) {
+      console.warn('Ayarlı Pervaz kart kapsamı conflict (overwrite yok):');
+      for (const c of ayarliCardEnabledReport.conflicts) {
+        console.warn(
+          `  ${c.thicknessMm}/${c.widthMm}/${c.lengthMm}: cardSaleEnabled DB=${c.existingValue}`,
+        );
+      }
+    }
+
+    const dekoratifPricingReport = await seedDekoratifPervazPricing(prisma);
+    console.log(
+      `Dekoratif Pervaz fiyatlandırma seed: ayarYeni=${dekoratifPricingReport.settingCreated}, ayarAynı=${dekoratifPricingReport.settingUnchanged}, kartSabitDolduruldu=${dekoratifPricingReport.cardFixedBackfilled}, farkBeklenen=${dekoratifPricingReport.totalPremiumExpected}, farkYeni=${dekoratifPricingReport.premiumCreated}, farkAynı=${dekoratifPricingReport.premiumUnchanged}, conflict=${dekoratifPricingReport.conflicts}, eksikÜrün=${dekoratifPricingReport.missingProduct}`,
+    );
+
+    const genisPricingReport =
+      await seedDekoratifGenisKilcikPricing(prisma);
+    console.log(
+      `Dekoratif Geniş Kılçık fiyatlandırma seed: ayarYeni=${genisPricingReport.settingCreated}, ayarAynı=${genisPricingReport.settingUnchanged}, kartSabitDolduruldu=${genisPricingReport.cardFixedBackfilled}, farkBeklenen=${genisPricingReport.totalPremiumExpected}, farkYeni=${genisPricingReport.premiumCreated}, farkAynı=${genisPricingReport.premiumUnchanged}, conflict=${genisPricingReport.conflicts}, eksikÜrün=${genisPricingReport.missingProduct}`,
+    );
 
     const overrideReport = await seedDoorFramePriceOverrides(prisma);
     console.log(

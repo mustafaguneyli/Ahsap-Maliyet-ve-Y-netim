@@ -29,6 +29,43 @@ describe('PervazQtyService', () => {
     expect(prisma.pervazKilcikYield.create).not.toHaveBeenCalled();
   });
 
+  it('ürün bağlamlı 9×230 Excel NET 23 geometrik 24’ü ezer', async () => {
+    const prisma = {
+      productionYield: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValueOnce({ netQty: 23 })
+          .mockResolvedValue({ netQty: 24 }),
+        create: jest.fn(),
+      },
+      pervazKilcikYield: { findFirst: jest.fn(), create: jest.fn() },
+    };
+    const service = new PervazQtyService(prisma as never);
+
+    const result = await service.resolvePervazPiece({
+      productId: 'p-genis',
+      rawMaterialId: 'rm-12-220',
+      sheetWidthMm: 2200,
+      sheetLengthMm: 2800,
+      pieceWidthMm: 90,
+      pieceLengthMm: 2300,
+    });
+
+    expect(result.source).toBe('EXCEL_MASTER');
+    expect(result.netQty).toBe(23);
+    expect(result.calculatedQty).toBe(24);
+    expect(prisma.productionYield.findFirst).toHaveBeenCalledTimes(1);
+    expect(prisma.productionYield.findFirst).toHaveBeenCalledWith({
+      where: {
+        rawMaterialId: 'rm-12-220',
+        pieceWidthMm: 90,
+        pieceLengthMm: 2300,
+        isActive: true,
+        productId: 'p-genis',
+      },
+    });
+  });
+
   it('kılçık master yoksa CALCULATED_EXCEL_RULE üretir, kaydetmez', async () => {
     const prisma = {
       productionYield: { findFirst: jest.fn(), create: jest.fn() },

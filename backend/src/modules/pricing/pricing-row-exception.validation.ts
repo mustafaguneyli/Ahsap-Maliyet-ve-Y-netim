@@ -7,7 +7,9 @@ export type PricingRowExceptionInput = {
   widthMm: number;
   lengthMm: number;
   profitRate: string | number | null | undefined;
+  decorativePremiumRate?: string | number | null | undefined;
   adjustmentAmount: string | number | null | undefined;
+  cardSaleEnabled?: boolean | null;
   effectiveFrom: Date;
   effectiveTo: Date | null | undefined;
   productIsActive?: boolean | null;
@@ -37,7 +39,8 @@ function parseDecimalField(fieldName: string, value: string | number): ReturnTyp
 
 /**
  * Satır istisnası doğrulaması.
- * profitRate veya adjustmentAmount'dan en az biri dolu olmalı.
+ * profitRate, decorativePremiumRate, adjustmentAmount veya cardSaleEnabled'dan
+ * en az biri dolu olmalı.
  * İleride dönem kapatma ExtraCostValue / PricingSetting ile aynı transaction+audit kalıbını kullanır.
  */
 export function assertPricingRowException(input: PricingRowExceptionInput): void {
@@ -50,10 +53,12 @@ export function assertPricingRowException(input: PricingRowExceptionInput): void
   assertPositiveInt('lengthMm', input.lengthMm);
 
   const hasProfit = isProvided(input.profitRate);
+  const hasDecorativePremium = isProvided(input.decorativePremiumRate);
   const hasAdjustment = isProvided(input.adjustmentAmount);
-  if (!hasProfit && !hasAdjustment) {
+  const hasCardSaleEnabled = input.cardSaleEnabled != null;
+  if (!hasProfit && !hasDecorativePremium && !hasAdjustment && !hasCardSaleEnabled) {
     throw new BadRequestException(
-      'Satır istisnasında profitRate veya adjustmentAmount alanlarından en az biri dolu olmalıdır.',
+      'Satır istisnasında profitRate, decorativePremiumRate, adjustmentAmount veya cardSaleEnabled alanlarından en az biri dolu olmalıdır.',
     );
   }
 
@@ -62,6 +67,20 @@ export function assertPricingRowException(input: PricingRowExceptionInput): void
     if (profit.isNegative()) {
       throw new BadRequestException(
         `profitRate negatif olamaz; verilen değer: ${String(input.profitRate)}.`,
+      );
+    }
+  }
+
+  if (hasDecorativePremium) {
+    const premium = parseDecimalField(
+      'decorativePremiumRate',
+      input.decorativePremiumRate as string | number,
+    );
+    if (premium.isNegative()) {
+      throw new BadRequestException(
+        `decorativePremiumRate negatif olamaz; verilen değer: ${String(
+          input.decorativePremiumRate,
+        )}.`,
       );
     }
   }

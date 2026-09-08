@@ -29,11 +29,12 @@ function basePrisma(overrides?: {
 }
 
 describe('AYARLI_PERVAZ_PRICING_SEED', () => {
-  it('yalnız profitRate=15; vatRate ve cardMarkupRate null', () => {
+  it('profitRate=15; vatRate ve cardMarkupRate null; cardFixedSurchargeAmount=2', () => {
     expect(AYARLI_PERVAZ_PRICING_SEED).toEqual({
       profitRate: '15',
       vatRate: null,
       cardMarkupRate: null,
+      cardFixedSurchargeAmount: '2',
     });
   });
 });
@@ -64,6 +65,9 @@ describe('seedAyarliPervazPricingSettings', () => {
       isActive: true,
     });
     expect(prisma.pricingSetting.create.mock.calls[0][0].data.profitRate.toString()).toBe('15');
+    expect(
+      prisma.pricingSetting.create.mock.calls[0][0].data.cardFixedSurchargeAmount.toString(),
+    ).toBe('2');
     expect(prisma.pricingSetting.update).not.toHaveBeenCalled();
   });
 
@@ -74,6 +78,7 @@ describe('seedAyarliPervazPricingSettings', () => {
         profitRate: { toString: () => '15' },
         vatRate: null,
         cardMarkupRate: null,
+        cardFixedSurchargeAmount: { toString: () => '2' },
         isActive: true,
       },
     });
@@ -94,6 +99,7 @@ describe('seedAyarliPervazPricingSettings', () => {
         profitRate: { toString: () => '17' },
         vatRate: null,
         cardMarkupRate: null,
+        cardFixedSurchargeAmount: { toString: () => '2' },
         isActive: true,
       },
     });
@@ -107,6 +113,60 @@ describe('seedAyarliPervazPricingSettings', () => {
     ]);
     expect(prisma.pricingSetting.create).not.toHaveBeenCalled();
     expect(prisma.pricingSetting.update).not.toHaveBeenCalled();
+  });
+
+  it('cardFixedSurchargeAmount null ise profit korunarak 2 backfill eder', async () => {
+    const prisma = basePrisma({
+      active: {
+        id: 'ps-old',
+        profitRate: { toString: () => '15' },
+        vatRate: null,
+        cardMarkupRate: null,
+        cardFixedSurchargeAmount: null,
+        isActive: true,
+      },
+    });
+
+    const report = await seedAyarliPervazPricingSettings(prisma as never);
+
+    expect(report.cardFixedBackfilled).toBe(1);
+    expect(report.created).toBe(0);
+    expect(prisma.pricingSetting.update).toHaveBeenCalledWith({
+      where: { id: 'ps-old' },
+      data: { isActive: false },
+    });
+    expect(
+      prisma.pricingSetting.create.mock.calls[0][0].data.cardFixedSurchargeAmount.toString(),
+    ).toBe('2');
+    expect(prisma.pricingSetting.create.mock.calls[0][0].data.profitRate.toString()).toBe(
+      '15',
+    );
+  });
+
+  it('kullanıcı cardFixedSurchargeAmount=3 yaptıysa seed 2’ye çevirmez', async () => {
+    const prisma = basePrisma({
+      active: {
+        id: 'ps-user-card',
+        profitRate: { toString: () => '15' },
+        vatRate: null,
+        cardMarkupRate: null,
+        cardFixedSurchargeAmount: { toString: () => '3' },
+        isActive: true,
+      },
+    });
+
+    const report = await seedAyarliPervazPricingSettings(prisma as never);
+
+    expect(report.created).toBe(0);
+    expect(report.cardFixedBackfilled).toBe(0);
+    expect(report.conflicts).toEqual([
+      {
+        field: 'cardFixedSurchargeAmount',
+        seedValue: '2',
+        existingValue: '3',
+      },
+    ]);
+    expect(prisma.pricingSetting.create).not.toHaveBeenCalled();
   });
 
   it('PERVAZ grubu veya AYARLI_PERVAZ yoksa create etmez', async () => {

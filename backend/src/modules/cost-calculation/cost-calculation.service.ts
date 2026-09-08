@@ -9,6 +9,7 @@ import type {
   DoorFrameExtraCostsInput,
   DoorFrameSizeCostInput,
 } from '../../calculation-engine/calculators/door-frame-calculator';
+import type { DekoratifPervazProductCode } from '../../calculation-engine/calculators/dekoratif-pervaz-calculator';
 import {
   DoorFrameVariantCode,
   formatDoorFrameSizeLabel,
@@ -20,7 +21,10 @@ import { ExtraCostListResponse, ExtraCostsService } from '../extra-costs/extra-c
 import { AYARLI_PERVAZ_KILCIK_MATERIAL_CODE } from '../pervaz/ayarli-pervaz-kilcik-yield-seed';
 import {
   resolveAyarliPervazAdjustment,
+  resolveAyarliPervazCardSaleEnabled,
   resolveAyarliPervazProfitRate,
+  resolveDekoratifPervazPremiumRate,
+  resolvePervazCardFixedSurchargeAmount,
 } from '../pricing/ayarli-pervaz-profit-rate.resolver';
 import { PervazQtyService } from '../pervaz/pervaz-qty.service';
 import {
@@ -29,6 +33,9 @@ import {
 } from '../price-overrides/apply-published-sale-prices';
 import { PrismaService } from '../../prisma/prisma.service';
 import { selectCurrentMaterialPrice } from './current-material-price';
+import { buildAyarliPervazYieldSeedRows } from '../production-yields/pervaz-ayarli-yield-seed-data';
+import { DEKORATIF_PERVAZ_YIELD_SEEDS } from '../production-yields/pervaz-dekoratif-yield-seed-data';
+import { DEKORATIF_GENIS_KILCIK_YIELD_SEEDS } from '../production-yields/pervaz-dekoratif-genis-kilcik-yield-seed-data';
 
 @Injectable()
 export class CostCalculationService {
@@ -89,6 +96,7 @@ export class CostCalculationService {
 
     const yields = await this.prisma.productionYield.findMany({
       where: {
+        productId: null,
         isActive: true,
         rawMaterialId: { in: materials.map((m) => m.id) },
       },
@@ -181,7 +189,8 @@ export class CostCalculationService {
 
   /**
    * Ayarlı Pervaz — MDF + PERVAZ ek maliyet + kâr + ROUNDUP + satır adjustment.
-   * KDV / kart / mutlak PriceOverride yok. Her istekte yeniden hesaplanır.
+   * Kart: yalnız cardSaleEnabled === true satırlarda publishedCash + cardFixedSurchargeAmount.
+   * KDV / mutlak PriceOverride yok. Her istekte yeniden hesaplanır.
    */
   async getAyarliPervazMdfCost(
     input: {
@@ -189,6 +198,7 @@ export class CostCalculationService {
       thicknessMm: number;
       widthMm: number;
       lengthMm: number;
+      rawMaterialCode?: string;
     },
     now: Date = new Date(),
   ) {
@@ -215,12 +225,18 @@ export class CostCalculationService {
       throw new NotFoundException('Aktif ürün bulunamadı: AYARLI_PERVAZ');
     }
 
-    const mainMaterial = await this.resolveAyarliPervazMainMaterial(
-      input.thicknessMm,
-      input.widthMm,
-      input.lengthMm,
-    );
+    const mainMaterial = input.rawMaterialCode
+      ? await this.requireAyarliPervazMainMaterialByCode(
+          input.rawMaterialCode,
+          input.thicknessMm,
+        )
+      : await this.resolveAyarliPervazMainMaterial(
+          input.thicknessMm,
+          input.widthMm,
+          input.lengthMm,
+        );
     const mainQty = await this.pervazQtyService.resolvePervazPiece({
+      productId: product.id,
       rawMaterialId: mainMaterial.id,
       sheetWidthMm: mainMaterial.sheetWidthMm,
       sheetLengthMm: mainMaterial.sheetLengthMm,
@@ -293,6 +309,12 @@ export class CostCalculationService {
       now,
       rowExceptions,
     });
+    const cardFixedSurchargeAmount =
+      resolvePervazCardFixedSurchargeAmount(productSettings);
+    const cardSaleEnabled = resolveAyarliPervazCardSaleEnabled({
+      now,
+      rowExceptions,
+    });
 
     const calcInput: AyarliPervazMdfInput = {
       productCode: 'AYARLI_PERVAZ',
@@ -316,6 +338,8 @@ export class CostCalculationService {
       extraCosts,
       profitRate: resolvedProfit.profitRate,
       adjustmentAmount: resolvedAdjustment.adjustmentAmount,
+      cardFixedSurchargeAmount,
+      cardSaleEnabled,
     };
 
     const result = this.engine.calculateAyarliPervazMdf(calcInput);
@@ -334,6 +358,355 @@ export class CostCalculationService {
     };
   }
 
+  /**
+   * Ayarlı Pervaz doğrulanmış Excel master ölçüleri.
+   * Yalnız seed registry ile eşleşen aktif ProductionYield kayıtları listelenir;
+   * fallback ile hesaplanabilecek yeni ölçüler bu tabloya otomatik girmez.
+   */
+  async getAyarliPervazMdfCosts(now: Date = new Date()) {
+    const verifiedRows = buildAyarliPervazYieldSeedRows();
+    const activeYields = await this.prisma.productionYield.findMany({
+      where: {
+        productId: null,
+        isActive: true,
+        OR: verifiedRows.map((row) => ({
+          rawMaterial: {
+            code: row.materialCode,
+            isActive: true,
+          },
+          pieceWidthMm: row.pieceWidthMm,
+          pieceLengthMm: row.pieceLengthMm,
+        })),
+      },
+      include: {
+        rawMaterial: true,
+      },
+    });
+
+    const activeKeys = new Set(
+      activeYields.map(
+        (row) =>
+          `${row.rawMaterial.code}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
+      ),
+    );
+    const contexts = verifiedRows.filter((row) =>
+      activeKeys.has(`${row.materialCode}:${row.pieceWidthMm}:${row.pieceLengthMm}`),
+    );
+
+    const rows = [];
+    for (const row of contexts) {
+      const thicknessMatch = /^MDF-(\d+)-/.exec(row.materialCode);
+      if (!thicknessMatch) {
+        throw new BadRequestException(
+          `Ayarlı Pervaz master ham madde kodundan kalınlık okunamadı: ${row.materialCode}`,
+        );
+      }
+      rows.push(
+        await this.getAyarliPervazMdfCost(
+          {
+            productCode: 'AYARLI_PERVAZ',
+            thicknessMm: Number(thicknessMatch[1]),
+            widthMm: row.pieceWidthMm,
+            lengthMm: row.pieceLengthMm,
+            rawMaterialCode: row.materialCode,
+          },
+          now,
+        ),
+      );
+    }
+
+    return {
+      productCode: 'AYARLI_PERVAZ',
+      productName: 'Ayarlı Pervaz',
+      asOf: now.toISOString(),
+      verifiedMeasureCount: rows.length,
+      rows,
+    };
+  }
+
+  /**
+   * Dekoratif Pervaz — yalnız doğrulanmış ve aktif altı Excel master satırı.
+   * Hesaplar her istekte güncel MDF, PERVAZ masraf ve product kâr ayarını kullanır.
+   */
+  async getDekoratifPervazCosts(now: Date = new Date()) {
+    const activeYields = await this.prisma.productionYield.findMany({
+      where: {
+        productId: null,
+        isActive: true,
+        OR: DEKORATIF_PERVAZ_YIELD_SEEDS.map((row) => ({
+          rawMaterial: { code: row.materialCode, isActive: true },
+          pieceWidthMm: row.pieceWidthMm,
+          pieceLengthMm: row.pieceLengthMm,
+        })),
+      },
+      include: { rawMaterial: true },
+    });
+    const activeKeys = new Set(
+      activeYields.map(
+        (row) =>
+          `${row.rawMaterial.code}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
+      ),
+    );
+    const contexts = DEKORATIF_PERVAZ_YIELD_SEEDS.filter((row) =>
+      activeKeys.has(
+        `${row.materialCode}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
+      ),
+    );
+
+    const rows = [];
+    for (const context of contexts) {
+      rows.push(
+        await this.calculateDekoratifPervazRow(
+          'DEKORATIF_PERVAZ',
+          context,
+          now,
+        ),
+      );
+    }
+
+    return {
+      productCode: 'DEKORATIF_PERVAZ',
+      productName: 'Dekoratif Pervaz',
+      asOf: now.toISOString(),
+      verifiedMeasureCount: rows.length,
+      rows,
+    };
+  }
+
+  /** Dekoratif Pervaz Geniş Kılçık — yalnız Excel AC96–AC97 master satırları. */
+  async getDekoratifGenisKilcikCosts(now: Date = new Date()) {
+    const product = await this.requirePervazProduct(
+      'DEKORATIF_PERVAZ_GENIS_KILCIK',
+    );
+    const activeYields = await this.prisma.productionYield.findMany({
+      where: {
+        productId: product.id,
+        isActive: true,
+        OR: DEKORATIF_GENIS_KILCIK_YIELD_SEEDS.map((row) => ({
+          rawMaterial: { code: row.materialCode, isActive: true },
+          pieceWidthMm: row.pieceWidthMm,
+          pieceLengthMm: row.pieceLengthMm,
+        })),
+      },
+      include: { rawMaterial: true },
+    });
+    const activeKeys = new Set(
+      activeYields.map(
+        (row) =>
+          `${row.rawMaterial.code}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
+      ),
+    );
+    const contexts = DEKORATIF_GENIS_KILCIK_YIELD_SEEDS.filter((row) =>
+      activeKeys.has(
+        `${row.materialCode}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
+      ),
+    );
+    const rows = [];
+    for (const context of contexts) {
+      rows.push(
+        await this.calculateDekoratifPervazRow(
+          'DEKORATIF_PERVAZ_GENIS_KILCIK',
+          context,
+          now,
+        ),
+      );
+    }
+    return {
+      productCode: 'DEKORATIF_PERVAZ_GENIS_KILCIK',
+      productName: product.name,
+      asOf: now.toISOString(),
+      verifiedMeasureCount: rows.length,
+      rows,
+    };
+  }
+
+  private async calculateDekoratifPervazRow(
+    productCode: DekoratifPervazProductCode,
+    context: {
+      materialCode: string;
+      thicknessMm: number;
+      pieceWidthMm: number;
+      pieceLengthMm: number;
+    },
+    now: Date,
+  ) {
+    const group = await this.prisma.productGroup.findUnique({
+      where: { code: 'PERVAZ' },
+    });
+    const product = group
+      ? await this.prisma.product.findUnique({
+          where: {
+            productGroupId_code: {
+              productGroupId: group.id,
+              code: productCode,
+            },
+          },
+        })
+      : null;
+    if (!group?.isActive || !product?.isActive) {
+      throw new NotFoundException(`Aktif ürün bulunamadı: ${productCode}`);
+    }
+
+    const mainMaterial = await this.prisma.rawMaterial.findUnique({
+      where: { code: context.materialCode },
+      include: { prices: true },
+    });
+    if (!mainMaterial?.isActive) {
+      throw new NotFoundException(
+        `Aktif ham madde bulunamadı: ${context.materialCode}`,
+      );
+    }
+    const mainQty = await this.pervazQtyService.resolvePervazPiece({
+      productId: product.id,
+      rawMaterialId: mainMaterial.id,
+      sheetWidthMm: mainMaterial.sheetWidthMm,
+      sheetLengthMm: mainMaterial.sheetLengthMm,
+      pieceWidthMm: context.pieceWidthMm,
+      pieceLengthMm: context.pieceLengthMm,
+    });
+
+    const kilcikMaterial = await this.prisma.rawMaterial.findUnique({
+      where: { code: AYARLI_PERVAZ_KILCIK_MATERIAL_CODE },
+      include: { prices: true },
+    });
+    if (!kilcikMaterial?.isActive) {
+      throw new NotFoundException(
+        `Aktif ham madde bulunamadı: ${AYARLI_PERVAZ_KILCIK_MATERIAL_CODE}`,
+      );
+    }
+    const kilcikQty = await this.pervazQtyService.resolveKilcik({
+      productId: product.id,
+      pervazThicknessMm: context.thicknessMm,
+      pieceLengthMm: context.pieceLengthMm,
+      sheetWidthMm: kilcikMaterial.sheetWidthMm,
+      sheetLengthMm: kilcikMaterial.sheetLengthMm,
+    });
+    const extraCosts = this.requirePervazExtraCosts(
+      await this.extraCostsService.listForProductGroup('PERVAZ', now),
+    );
+
+    const rowExceptions = await this.prisma.pricingRowException.findMany({
+      where: {
+        productId: product.id,
+        thicknessMm: context.thicknessMm,
+        widthMm: context.pieceWidthMm,
+        lengthMm: context.pieceLengthMm,
+        isActive: true,
+      },
+    });
+    const productSettings = await this.prisma.pricingSetting.findMany({
+      where: {
+        productId: product.id,
+        productGroupId: null,
+        isActive: true,
+      },
+    });
+    const groupSettings = await this.prisma.pricingSetting.findMany({
+      where: {
+        productGroupId: group.id,
+        productId: null,
+        isActive: true,
+      },
+    });
+    const globalSettings = await this.prisma.pricingSetting.findMany({
+      where: {
+        productGroupId: null,
+        productId: null,
+        isActive: true,
+      },
+    });
+    const resolvedProfit = resolveAyarliPervazProfitRate({
+      now,
+      productCode,
+      rowExceptions,
+      productSettings,
+      groupSettings,
+      globalSettings,
+    });
+    const decorativePremiumRate = resolveDekoratifPervazPremiumRate({
+      now,
+      rowExceptions,
+    });
+    const cardFixedSurchargeAmount =
+      resolvePervazCardFixedSurchargeAmount(productSettings);
+    const result = this.engine.calculateDekoratifPervaz({
+      productCode,
+      thicknessMm: context.thicknessMm,
+      widthMm: context.pieceWidthMm,
+      lengthMm: context.pieceLengthMm,
+      mainPiece: {
+        rawMaterialCode: mainMaterial.code,
+        sheetPriceType: 'CARD_INSTALLMENT',
+        sheetPrice: this.requireCardSheetPrice(mainMaterial, now),
+        netQty: mainQty.netQty,
+        yieldSource: mainQty.source,
+      },
+      kilcik: {
+        rawMaterialCode: kilcikMaterial.code,
+        sheetPriceType: 'CARD_INSTALLMENT',
+        sheetPrice: this.requireCardSheetPrice(kilcikMaterial, now),
+        netQty: kilcikQty.netQty,
+        yieldSource: kilcikQty.source,
+      },
+      extraCosts,
+      profitRate: resolvedProfit.profitRate,
+      decorativePremiumRate,
+      cardFixedSurchargeAmount,
+    });
+
+    return {
+      productGroupCode: 'PERVAZ',
+      productGroupName: group.name,
+      priceType: MaterialPriceType.CARD_INSTALLMENT,
+      asOf: now.toISOString(),
+      ...result,
+      pricing: {
+        ...result.pricing,
+        profitRateSource: resolvedProfit.source,
+      },
+    };
+  }
+
+  private async requirePervazProduct(productCode: string) {
+    const group = await this.prisma.productGroup.findUnique({
+      where: { code: 'PERVAZ' },
+    });
+    if (!group?.isActive) {
+      throw new NotFoundException('Ürün grubu bulunamadı: PERVAZ');
+    }
+    const product = await this.prisma.product.findUnique({
+      where: {
+        productGroupId_code: {
+          productGroupId: group.id,
+          code: productCode,
+        },
+      },
+    });
+    if (!product?.isActive) {
+      throw new NotFoundException(`Aktif ürün bulunamadı: ${productCode}`);
+    }
+    return product;
+  }
+
+  private async requireAyarliPervazMainMaterialByCode(
+    code: string,
+    thicknessMm: number,
+  ) {
+    const material = await this.prisma.rawMaterial.findUnique({
+      where: { code },
+      include: { prices: true },
+    });
+    if (!material?.isActive) {
+      throw new NotFoundException(`Aktif ham madde bulunamadı: ${code}`);
+    }
+    if (Number(material.thicknessMm) !== thicknessMm) {
+      throw new BadRequestException(
+        `${code} kalınlığı ${material.thicknessMm} mm; beklenen ${thicknessMm} mm.`,
+      );
+    }
+    return material;
+  }
+
   private async resolveAyarliPervazMainMaterial(
     thicknessMm: number,
     widthMm: number,
@@ -341,6 +714,7 @@ export class CostCalculationService {
   ) {
     const yields = await this.prisma.productionYield.findMany({
       where: {
+        productId: null,
         isActive: true,
         pieceWidthMm: widthMm,
         pieceLengthMm: lengthMm,

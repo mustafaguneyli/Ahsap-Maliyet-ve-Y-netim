@@ -7,6 +7,7 @@ export type PricingSettingInput = {
   vatRate: string | number | null | undefined;
   profitRate: string | number | null | undefined;
   cardMarkupRate: string | number | null | undefined;
+  cardFixedSurchargeAmount?: string | number | null | undefined;
   /** productGroupId doluysa ilgili ProductGroup.isActive */
   productGroupIsActive?: boolean | null;
   /** productId doluysa ilgili Product.isActive */
@@ -45,8 +46,9 @@ function isRateProvided(value: string | number | null | undefined): boolean {
 /**
  * PricingSetting doğrulaması.
  *
- * - Oranlar negatif olamaz (Decimal ile kontrol)
- * - Aynı kayıtta vatRate, profitRate, cardMarkupRate hepsi null olamaz
+ * - Oranlar ve sabit kart tutarı negatif olamaz (Decimal ile kontrol)
+ * - vatRate, profitRate, cardMarkupRate, cardFixedSurchargeAmount hepsi null olamaz
+ * - cardMarkupRate (yüzde) ile cardFixedSurchargeAmount (sabit TL) aynı anda dolu olamaz
  * - productGroupId ve productId aynı anda dolu olamaz
  * - İkisi de boş = global ayar (izinli)
  * - productGroupId doluysa ProductGroup aktif olmalı
@@ -69,16 +71,27 @@ export function assertPricingSetting(input: PricingSettingInput): void {
   if (
     !isRateProvided(input.vatRate) &&
     !isRateProvided(input.profitRate) &&
-    !isRateProvided(input.cardMarkupRate)
+    !isRateProvided(input.cardMarkupRate) &&
+    !isRateProvided(input.cardFixedSurchargeAmount)
   ) {
     throw new BadRequestException(
-      'PricingSetting kaydında vatRate, profitRate veya cardMarkupRate alanlarından en az biri dolu olmalıdır.',
+      'PricingSetting kaydında vatRate, profitRate, cardMarkupRate veya cardFixedSurchargeAmount alanlarından en az biri dolu olmalıdır.',
+    );
+  }
+
+  if (
+    isRateProvided(input.cardMarkupRate) &&
+    isRateProvided(input.cardFixedSurchargeAmount)
+  ) {
+    throw new BadRequestException(
+      'PricingSetting kaydında cardMarkupRate (yüzde) ve cardFixedSurchargeAmount (sabit TL) aynı anda dolu olamaz.',
     );
   }
 
   assertNonNegativeRate('vatRate', input.vatRate);
   assertNonNegativeRate('profitRate', input.profitRate);
   assertNonNegativeRate('cardMarkupRate', input.cardMarkupRate);
+  assertNonNegativeRate('cardFixedSurchargeAmount', input.cardFixedSurchargeAmount);
 
   if (hasGroup && input.productGroupIsActive === false) {
     throw new BadRequestException(

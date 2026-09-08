@@ -1,25 +1,39 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
+  AyarliPervazMdfResponse,
+  DekoratifGenisKilcikResponse,
+  DekoratifPervazResponse,
   DoorFrameMdfResponse,
   DoorFrameMdfRow,
+  fetchAyarliPervazMdfCosts,
+  fetchDekoratifGenisKilcikCosts,
+  fetchDekoratifPervazCosts,
   fetchDoorFrameMdfCosts,
 } from '../api/cost-calculation-api';
 import { listExtraCosts, updateExtraCostValue } from '../api/extra-costs-api';
 import {
+  AyarliPervazPricingSetting,
   ProductPricingSetting,
   getDoorFramePricingSetting,
+  getPervazPricingSetting,
   updateDoorFramePricingSetting,
+  updatePervazPricingSetting,
 } from '../api/pricing-settings-api';
 import { ApiError } from '../lib/api';
 import { formatPercentRate, formatTry } from '../lib/money';
+import { PervazCostTable } from '../components/pervaz-cost-table';
 import {
   deactivateDoorFrameCashOverride,
   upsertDoorFrameCashOverride,
 } from '../api/price-overrides-api';
 import './cost-calculation-page.css';
 
-type ProductGroup = 'door_frame';
+type ProductGroup = 'door_frame' | 'PERVAZ';
 type DoorFrameVariant = '34_MM' | '30_MM';
+type PervazProduct =
+  | 'AYARLI_PERVAZ'
+  | 'DEKORATIF_PERVAZ'
+  | 'DEKORATIF_PERVAZ_GENIS_KILCIK';
 
 type ExtraForm = {
   CUTTING: string;
@@ -32,6 +46,7 @@ type PricingForm = {
   vatRate: string;
   profitRate: string;
   cardMarkupRate: string;
+  cardFixedSurchargeAmount: string;
 };
 
 const EXTRA_LABELS: Record<keyof ExtraForm, string> = {
@@ -42,6 +57,7 @@ const EXTRA_LABELS: Record<keyof ExtraForm, string> = {
 };
 
 const EXTRA_ORDER: Array<keyof ExtraForm> = ['CUTTING', 'GLUE', 'LABOR', 'OTHER'];
+const PERVAZ_EXTRA_ORDER: Array<keyof ExtraForm> = ['CUTTING', 'GLUE', 'LABOR'];
 
 function todayIsoDate(): string {
   const now = new Date();
@@ -79,7 +95,16 @@ function emptyExtraForm(): ExtraForm {
 export function CostCalculationPage() {
   const [productGroup, setProductGroup] = useState<ProductGroup>('door_frame');
   const [variant, setVariant] = useState<DoorFrameVariant>('34_MM');
+  const [pervazProduct, setPervazProduct] =
+    useState<PervazProduct>('AYARLI_PERVAZ');
   const [data, setData] = useState<DoorFrameMdfResponse | null>(null);
+  const [pervazData, setPervazData] =
+    useState<
+      | AyarliPervazMdfResponse
+      | DekoratifPervazResponse
+      | DekoratifGenisKilcikResponse
+      | null
+    >(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -95,13 +120,17 @@ export function CostCalculationPage() {
     vatRate: '',
     profitRate: '',
     cardMarkupRate: '',
+    cardFixedSurchargeAmount: '',
   });
   const [pricingForm, setPricingForm] = useState<PricingForm>({
     vatRate: '',
     profitRate: '',
     cardMarkupRate: '',
+    cardFixedSurchargeAmount: '',
   });
-  const [pricingMeta, setPricingMeta] = useState<ProductPricingSetting | null>(null);
+  const [pricingMeta, setPricingMeta] = useState<
+    ProductPricingSetting | AyarliPervazPricingSetting | null
+  >(null);
 
   const [priceEditRow, setPriceEditRow] = useState<DoorFrameMdfRow | null>(null);
   const [priceEditCash, setPriceEditCash] = useState('');
@@ -113,6 +142,17 @@ export function CostCalculationPage() {
     () => (variant === '34_MM' ? (['22', '12'] as const) : (['18', '12'] as const)),
     [variant],
   );
+  const activeExtraOrder =
+    productGroup === 'PERVAZ' ? PERVAZ_EXTRA_ORDER : EXTRA_ORDER;
+  const pervazProductLabel =
+    pervazProduct === 'AYARLI_PERVAZ'
+      ? 'Ayarlı Pervaz'
+      : pervazProduct === 'DEKORATIF_PERVAZ'
+        ? 'Dekoratif Pervaz'
+        : 'Dekoratif Pervaz - Geniş Kılçık';
+  const canEditPervazCardFixed =
+    productGroup === 'PERVAZ' &&
+    (pervazProduct === 'AYARLI_PERVAZ' || pervazProduct === 'DEKORATIF_PERVAZ');
 
   const reloadCosts = async (targetVariant: DoorFrameVariant = variant) => {
     setLoading(true);
@@ -123,6 +163,29 @@ export function CostCalculationPage() {
     } catch (err) {
       setData(null);
       setError(err instanceof ApiError ? err.message : 'MDF maliyeti yüklenemedi.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const reloadPervazCosts = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setPervazData(
+        pervazProduct === 'AYARLI_PERVAZ'
+          ? await fetchAyarliPervazMdfCosts()
+          : pervazProduct === 'DEKORATIF_PERVAZ'
+            ? await fetchDekoratifPervazCosts()
+            : await fetchDekoratifGenisKilcikCosts(),
+      );
+    } catch (err) {
+      setPervazData(null);
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'Pervaz maliyetleri yüklenemedi.',
+      );
     } finally {
       setLoading(false);
     }
@@ -156,6 +219,42 @@ export function CostCalculationPage() {
   }, [productGroup, variant]);
 
   useEffect(() => {
+    if (productGroup !== 'PERVAZ') return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setPervazData(null);
+    const request =
+      pervazProduct === 'AYARLI_PERVAZ'
+        ? fetchAyarliPervazMdfCosts()
+        : pervazProduct === 'DEKORATIF_PERVAZ'
+          ? fetchDekoratifPervazCosts()
+          : fetchDekoratifGenisKilcikCosts();
+    void request
+      .then((response) => {
+        if (!cancelled) setPervazData(response);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setPervazData(null);
+          setError(
+            err instanceof ApiError
+              ? err.message
+              : 'Pervaz maliyetleri yüklenemedi.',
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [productGroup, pervazProduct]);
+
+  useEffect(() => {
     if (!notice) return;
     const t = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(t);
@@ -165,13 +264,19 @@ export function CostCalculationPage() {
     setSettingsLoading(true);
     setFormError(null);
     try {
-      const [extras, pricing] = await Promise.all([
-        listExtraCosts('door_frame'),
-        getDoorFramePricingSetting(variant),
-      ]);
+      const [extras, pricing] =
+        productGroup === 'PERVAZ'
+          ? await Promise.all([
+              listExtraCosts('PERVAZ'),
+              getPervazPricingSetting(pervazProduct),
+            ])
+          : await Promise.all([
+              listExtraCosts('door_frame'),
+              getDoorFramePricingSetting(variant),
+            ]);
 
       const nextExtra: ExtraForm = emptyExtraForm();
-      for (const code of EXTRA_ORDER) {
+      for (const code of activeExtraOrder) {
         const item = extras.items.find((i) => i.typeCode === code);
         nextExtra[code] = item?.amount ?? '';
       }
@@ -179,9 +284,15 @@ export function CostCalculationPage() {
       setExtraForm(nextExtra);
 
       const nextPricing = {
-        vatRate: pricing.vatRate,
+        vatRate: pricing.vatRate ?? '',
         profitRate: pricing.profitRate,
-        cardMarkupRate: pricing.cardMarkupRate,
+        cardMarkupRate: pricing.cardMarkupRate ?? '',
+        cardFixedSurchargeAmount:
+          productGroup === 'PERVAZ' &&
+          'cardFixedSurchargeAmount' in pricing &&
+          pricing.cardFixedSurchargeAmount != null
+            ? pricing.cardFixedSurchargeAmount
+            : '',
       };
       setPricingBaseline(nextPricing);
       setPricingForm(nextPricing);
@@ -266,7 +377,7 @@ export function CostCalculationPage() {
 
   const pendingChanges = useMemo(() => {
     const changes: Array<{ label: string; from: string; to: string }> = [];
-    for (const code of EXTRA_ORDER) {
+    for (const code of activeExtraOrder) {
       if (!amountsEqual(extraForm[code], extraBaseline[code])) {
         changes.push({
           label: EXTRA_LABELS[code],
@@ -275,7 +386,10 @@ export function CostCalculationPage() {
         });
       }
     }
-    if (!amountsEqual(pricingForm.vatRate, pricingBaseline.vatRate)) {
+    if (
+      productGroup === 'door_frame' &&
+      !amountsEqual(pricingForm.vatRate, pricingBaseline.vatRate)
+    ) {
       changes.push({
         label: 'KDV Oranı',
         from: formatPercentRate(normalizeDecimalInput(pricingBaseline.vatRate)),
@@ -289,40 +403,73 @@ export function CostCalculationPage() {
         to: formatPercentRate(normalizeDecimalInput(pricingForm.profitRate)),
       });
     }
-    if (!amountsEqual(pricingForm.cardMarkupRate, pricingBaseline.cardMarkupRate)) {
+    if (
+      productGroup === 'door_frame' &&
+      !amountsEqual(pricingForm.cardMarkupRate, pricingBaseline.cardMarkupRate)
+    ) {
       changes.push({
         label: 'Kredi Kartı Farkı',
         from: formatPercentRate(normalizeDecimalInput(pricingBaseline.cardMarkupRate)),
         to: formatPercentRate(normalizeDecimalInput(pricingForm.cardMarkupRate)),
       });
     }
+    if (
+      canEditPervazCardFixed &&
+      !amountsEqual(
+        pricingForm.cardFixedSurchargeAmount,
+        pricingBaseline.cardFixedSurchargeAmount,
+      )
+    ) {
+      changes.push({
+        label: 'Kart/Taksit Sabit Farkı',
+        from: formatTry(
+          normalizeDecimalInput(pricingBaseline.cardFixedSurchargeAmount),
+        ),
+        to: formatTry(normalizeDecimalInput(pricingForm.cardFixedSurchargeAmount)),
+      });
+    }
     return changes;
-  }, [extraForm, extraBaseline, pricingForm, pricingBaseline]);
+  }, [
+    activeExtraOrder,
+    extraForm,
+    extraBaseline,
+    pricingForm,
+    pricingBaseline,
+    productGroup,
+    canEditPervazCardFixed,
+  ]);
 
   const onSaveSettings = async (event: FormEvent) => {
     event.preventDefault();
     setFormError(null);
 
-    for (const code of EXTRA_ORDER) {
+    for (const code of activeExtraOrder) {
       const amount = normalizeDecimalInput(extraForm[code]);
       if (!isValidDecimal(amount)) {
         setFormError(`${EXTRA_LABELS[code]} geçerli bir tutar olmalıdır (örn. 17.00).`);
         return;
       }
     }
-    const vat = normalizeDecimalInput(pricingForm.vatRate);
     const profit = normalizeDecimalInput(pricingForm.profitRate);
-    const card = normalizeDecimalInput(pricingForm.cardMarkupRate);
-    if (!isValidDecimal(vat)) {
-      setFormError('KDV oranı geçerli olmalıdır (örn. 0 veya 10).');
-      return;
-    }
     if (!isValidDecimal(profit)) {
       setFormError('Kâr oranı geçerli olmalıdır (örn. 20).');
       return;
     }
-    if (!isValidDecimal(card)) {
-      setFormError('Kredi kartı farkı geçerli olmalıdır (örn. 20).');
+    const vat = normalizeDecimalInput(pricingForm.vatRate);
+    const card = normalizeDecimalInput(pricingForm.cardMarkupRate);
+    if (productGroup === 'door_frame') {
+      if (!isValidDecimal(vat)) {
+        setFormError('KDV oranı geçerli olmalıdır (örn. 0 veya 10).');
+        return;
+      }
+      if (!isValidDecimal(card)) {
+        setFormError('Kredi kartı farkı geçerli olmalıdır (örn. 20).');
+        return;
+      }
+    }
+    const cardFixed = normalizeDecimalInput(pricingForm.cardFixedSurchargeAmount);
+    if (canEditPervazCardFixed && !isValidDecimal(cardFixed)) {
+      setFormError('Kart/taksit sabit farkı geçerli bir tutar olmalıdır (örn. 2).');
       return;
     }
     if (pendingChanges.length === 0) {
@@ -333,31 +480,55 @@ export function CostCalculationPage() {
     setSaving(true);
     try {
       const effectiveFrom = todayIsoDate();
-      for (const code of EXTRA_ORDER) {
+      for (const code of activeExtraOrder) {
         if (amountsEqual(extraForm[code], extraBaseline[code])) continue;
         await updateExtraCostValue(code, {
-          productGroup: 'door_frame',
+          productGroup,
           amount: normalizeDecimalInput(extraForm[code]),
           effectiveFrom,
         });
       }
 
-      if (
-        !amountsEqual(pricingForm.vatRate, pricingBaseline.vatRate) ||
-        !amountsEqual(pricingForm.profitRate, pricingBaseline.profitRate) ||
-        !amountsEqual(pricingForm.cardMarkupRate, pricingBaseline.cardMarkupRate)
-      ) {
-        await updateDoorFramePricingSetting(variant, {
-          productGroup: 'door_frame',
-          vatRate: vat,
-          profitRate: profit,
-          cardMarkupRate: card,
-        });
+      if (productGroup === 'PERVAZ') {
+        const profitChanged = !amountsEqual(
+          pricingForm.profitRate,
+          pricingBaseline.profitRate,
+        );
+        const cardFixedChanged =
+          canEditPervazCardFixed &&
+          !amountsEqual(
+            pricingForm.cardFixedSurchargeAmount,
+            pricingBaseline.cardFixedSurchargeAmount,
+          );
+        if (profitChanged || cardFixedChanged) {
+          await updatePervazPricingSetting(
+            pervazProduct,
+            profit,
+            cardFixedChanged ? cardFixed : undefined,
+          );
+        }
+      } else {
+        if (
+          !amountsEqual(pricingForm.vatRate, pricingBaseline.vatRate) ||
+          !amountsEqual(pricingForm.profitRate, pricingBaseline.profitRate) ||
+          !amountsEqual(pricingForm.cardMarkupRate, pricingBaseline.cardMarkupRate)
+        ) {
+          await updateDoorFramePricingSetting(variant, {
+            productGroup: 'door_frame',
+            vatRate: vat,
+            profitRate: profit,
+            cardMarkupRate: card,
+          });
+        }
       }
 
       setDrawerOpen(false);
       setNotice('Maliyet ayarları kaydedildi. Tablo güncelleniyor…');
-      await reloadCosts(variant);
+      if (productGroup === 'PERVAZ') {
+        await reloadPervazCosts();
+      } else {
+        await reloadCosts(variant);
+      }
       setNotice('Maliyet ayarları uygulandı.');
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : 'Ayarlar kaydedilemedi.');
@@ -377,10 +548,30 @@ export function CostCalculationPage() {
             onChange={(e) => setProductGroup(e.target.value as ProductGroup)}
           >
             <option value="door_frame">Kapı Kasası</option>
+            <option value="PERVAZ">Pervaz</option>
           </select>
         </label>
 
-        {productGroup === 'door_frame' ? (
+        {productGroup === 'PERVAZ' ? (
+          <label className="cc-field cc-product-field">
+            <span>Ürün</span>
+            <select
+              className="cc-select"
+              value={pervazProduct}
+              onChange={(e) =>
+                setPervazProduct(e.target.value as PervazProduct)
+              }
+            >
+              <option value="AYARLI_PERVAZ">Ayarlı Pervaz</option>
+              <option value="DEKORATIF_PERVAZ">Dekoratif Pervaz</option>
+              <option value="DEKORATIF_PERVAZ_GENIS_KILCIK">
+                Dekoratif Pervaz - Geniş Kılçık
+              </option>
+            </select>
+          </label>
+        ) : null}
+
+        {productGroup === 'door_frame' || productGroup === 'PERVAZ' ? (
           <button
             type="button"
             className="cc-btn cc-btn-primary"
@@ -623,6 +814,88 @@ export function CostCalculationPage() {
         </>
       ) : null}
 
+      {productGroup === 'PERVAZ' ? (
+          <>
+            <div className="cc-list-heading">
+              <div>
+                <strong>
+                  {pervazProductLabel}
+                </strong>
+                <span>
+                  {pervazData
+                    ? `${pervazData.verifiedMeasureCount} doğrulanmış ölçü`
+                    : 'Doğrulanmış master ölçüler'}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="cc-btn cc-btn-sm"
+                onClick={() => void reloadPervazCosts()}
+                disabled={loading}
+              >
+                {loading ? 'Yükleniyor…' : 'Yenile'}
+              </button>
+            </div>
+
+            <p className="cc-note">
+              Yalnız aktif ve doğrulanmış <strong>Excel master NET</strong>{' '}
+              ölçüleri gösterilir. Nakit satış; MDF, ortak Pervaz masrafları,
+              aktif kâr oranı
+              {pervazProduct !== 'AYARLI_PERVAZ'
+                ? ', dekoratif fark ve ROUNDUP'
+                : ', ROUNDUP ve varsa satır düzeltmesi'}
+              {' ile '}her istekte yeniden hesaplanır.
+            </p>
+
+            {notice ? <div className="cc-notice">{notice}</div> : null}
+            {error ? (
+              <div className="cc-alert cc-alert-actions">
+                <span>{error}</span>
+                <button
+                  type="button"
+                  className="cc-btn cc-btn-sm"
+                  onClick={() => void reloadPervazCosts()}
+                >
+                  Yeniden Dene
+                </button>
+              </div>
+            ) : null}
+
+            <div className="cc-table-wrap cc-pervaz-table-wrap">
+              {loading ? (
+                <div
+                  className="cc-table-skeleton"
+                  aria-label="Pervaz maliyetleri yükleniyor"
+                >
+                  {Array.from({ length: 8 }).map((_, index) => (
+                    <span key={index} />
+                  ))}
+                </div>
+              ) : !pervazData || pervazData.rows.length === 0 ? (
+                <div className="cc-empty">
+                  <p>Gösterilecek aktif doğrulanmış ölçü yok.</p>
+                  <button
+                    type="button"
+                    className="cc-btn cc-btn-sm"
+                    onClick={() => void reloadPervazCosts()}
+                  >
+                    Yenile
+                  </button>
+                </div>
+              ) : (
+                <PervazCostTable
+                  mode={
+                    pervazProduct === 'AYARLI_PERVAZ'
+                      ? 'ayarli'
+                      : 'dekoratif'
+                  }
+                  rows={pervazData.rows}
+                />
+              )}
+            </div>
+          </>
+      ) : null}
+
       {drawerOpen ? (
         <div className="cc-drawer-overlay" onClick={closeDrawer} role="presentation">
           <aside
@@ -644,9 +917,17 @@ export function CostCalculationPage() {
             ) : (
               <form className="cc-form" onSubmit={onSaveSettings}>
                 <section className="cc-form-section">
-                  <h3>Ortak Kapı Kasası Giderleri</h3>
-                  <p className="cc-hint">34 MM ve 30 MM aynı değerleri kullanır.</p>
-                  {EXTRA_ORDER.map((code) => (
+                  <h3>
+                    {productGroup === 'PERVAZ'
+                      ? 'Pervaz Ortak Masrafları'
+                      : 'Ortak Kapı Kasası Giderleri'}
+                  </h3>
+                  <p className="cc-hint">
+                    {productGroup === 'PERVAZ'
+                      ? 'Kesim, tutkal ve işçilik tüm Pervaz hesaplarında ortak kullanılır.'
+                      : '34 MM ve 30 MM aynı değerleri kullanır.'}
+                  </p>
+                  {activeExtraOrder.map((code) => (
                     <label key={code} className="cc-field">
                       <span>{EXTRA_LABELS[code]} (TL)</span>
                       <input
@@ -663,24 +944,44 @@ export function CostCalculationPage() {
 
                 <section className="cc-form-section">
                   <h3>
-                    {variant === '34_MM' ? '34 MM' : '30 MM'} Fiyatlandırma Ayarları
+                    {productGroup === 'PERVAZ'
+                      ? `${pervazProductLabel} Fiyatlandırma`
+                      : `${
+                          variant === '34_MM' ? '34 MM' : '30 MM'
+                        } Fiyatlandırma Ayarları`}
                   </h3>
                   <p className="cc-hint">
-                    {pricingMeta?.productName ?? variant} — yalnızca seçili kasa etkilenir.
+                    {pricingMeta?.productName ??
+                      (productGroup === 'PERVAZ' ? pervazProductLabel : variant)}
+                    {' — '}
+                    {productGroup === 'PERVAZ'
+                      ? pervazProduct !== 'AYARLI_PERVAZ'
+                        ? 'dekoratif fark oranları bu ekranda değiştirilmez.'
+                        : 'özel satır oranları değiştirilmez.'
+                      : 'yalnızca seçili kasa etkilenir.'}
                   </p>
+                  {productGroup === 'door_frame' ? (
+                    <label className="cc-field">
+                      <span>KDV Oranı (%)</span>
+                      <input
+                        className="cc-input"
+                        value={pricingForm.vatRate}
+                        onChange={(e) =>
+                          setPricingForm((prev) => ({
+                            ...prev,
+                            vatRate: e.target.value,
+                          }))
+                        }
+                        inputMode="decimal"
+                      />
+                    </label>
+                  ) : null}
                   <label className="cc-field">
-                    <span>KDV Oranı (%)</span>
-                    <input
-                      className="cc-input"
-                      value={pricingForm.vatRate}
-                      onChange={(e) =>
-                        setPricingForm((prev) => ({ ...prev, vatRate: e.target.value }))
-                      }
-                      inputMode="decimal"
-                    />
-                  </label>
-                  <label className="cc-field">
-                    <span>Kâr Oranı (%)</span>
+                    <span>
+                      {productGroup === 'PERVAZ'
+                        ? 'Varsayılan Kâr Oranı (%)'
+                        : 'Kâr Oranı (%)'}
+                    </span>
                     <input
                       className="cc-input"
                       value={pricingForm.profitRate}
@@ -690,20 +991,42 @@ export function CostCalculationPage() {
                       inputMode="decimal"
                     />
                   </label>
-                  <label className="cc-field">
-                    <span>Kredi Kartı Farkı (%)</span>
-                    <input
-                      className="cc-input"
-                      value={pricingForm.cardMarkupRate}
-                      onChange={(e) =>
-                        setPricingForm((prev) => ({
-                          ...prev,
-                          cardMarkupRate: e.target.value,
-                        }))
-                      }
-                      inputMode="decimal"
-                    />
-                  </label>
+                  {productGroup === 'door_frame' ? (
+                    <label className="cc-field">
+                      <span>Kredi Kartı Farkı (%)</span>
+                      <input
+                        className="cc-input"
+                        value={pricingForm.cardMarkupRate}
+                        onChange={(e) =>
+                          setPricingForm((prev) => ({
+                            ...prev,
+                            cardMarkupRate: e.target.value,
+                          }))
+                        }
+                        inputMode="decimal"
+                      />
+                    </label>
+                  ) : null}
+                  {canEditPervazCardFixed ? (
+                    <label className="cc-field">
+                      <span>Kart/Taksit Sabit Farkı (TL)</span>
+                      <input
+                        className="cc-input"
+                        value={pricingForm.cardFixedSurchargeAmount}
+                        onChange={(e) =>
+                          setPricingForm((prev) => ({
+                            ...prev,
+                            cardFixedSurchargeAmount: e.target.value,
+                          }))
+                        }
+                        inputMode="decimal"
+                      />
+                    </label>
+                  ) : null}
+                  {productGroup === 'PERVAZ' &&
+                  pervazProduct === 'DEKORATIF_PERVAZ_GENIS_KILCIK' ? (
+                    <p className="cc-hint">Doğrulanmış kart fiyatı bulunmuyor.</p>
+                  ) : null}
                 </section>
 
                 {pendingChanges.length > 0 ? (

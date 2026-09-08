@@ -77,6 +77,25 @@ describe('assertPervazKilcikYield', () => {
     ).toThrow(BadRequestException);
   });
 
+  it('12 mm WIDE Excel kesim eni 55 mm kabul eder', () => {
+    expect(() =>
+      assertPervazKilcikYield({
+        productId: 'p-genis',
+        productIsActive: true,
+        productGroupCode: 'PERVAZ',
+        pervazThicknessMm: 12,
+        source: 'EXCEL_MASTER',
+        kilcikTypeCode: 'WIDE',
+        kilcikTypeIsActive: true,
+        rawMaterialId: 'rm-4mm',
+        rawMaterialIsActive: true,
+        pieceLengthMm: 2300,
+        netQty: 40,
+        excelCutWidthMm: 55,
+      }),
+    ).not.toThrow();
+  });
+
   it('excelCutWidthMm kalınlık profiliyle uyuşmazsa reddeder', () => {
     expect(() =>
       assertPervazKilcikYield({

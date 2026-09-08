@@ -27,4 +27,28 @@ export class CostCalculationController {
   getAyarliPervazMdf(@Query() query: AyarliPervazMdfQueryDto) {
     return this.costCalculationService.getAyarliPervazMdfCost(query);
   }
+
+  /**
+   * Ayarlı Pervaz — yalnız doğrulanmış aktif Excel master ölçüleri.
+   * GET /cost-calculation/pervaz/ayarli
+   */
+  @Get('pervaz/ayarli')
+  getAyarliPervazMdfCosts() {
+    return this.costCalculationService.getAyarliPervazMdfCosts();
+  }
+
+  /**
+   * Dekoratif Pervaz — yalnız doğrulanmış aktif Excel master ölçüleri.
+   * GET /cost-calculation/pervaz/dekoratif
+   */
+  @Get('pervaz/dekoratif')
+  getDekoratifPervazCosts() {
+    return this.costCalculationService.getDekoratifPervazCosts();
+  }
+
+  /** GET /cost-calculation/pervaz/dekoratif-genis-kilcik */
+  @Get('pervaz/dekoratif-genis-kilcik')
+  getDekoratifGenisKilcikCosts() {
+    return this.costCalculationService.getDekoratifGenisKilcikCosts();
+  }
 }

@@ -129,6 +129,7 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
   const defaultProductSetting = {
     isActive: true,
     profitRate: { toString: () => '15' },
+    cardFixedSurchargeAmount: { toString: () => '2' },
   };
 
   const exceptionFrom = new Date('2026-03-01T00:00:00.000Z');
@@ -144,8 +145,13 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
       effectiveTo: Date | null;
       profitRate: { toString(): string } | null;
       adjustmentAmount: { toString(): string } | null;
+      cardSaleEnabled?: boolean | null;
     }>;
-    productSettings?: Array<{ isActive: boolean; profitRate: { toString(): string } | null }>;
+    productSettings?: Array<{
+      isActive: boolean;
+      profitRate: { toString(): string } | null;
+      cardFixedSurchargeAmount?: { toString(): string } | null;
+    }>;
     groupSettings?: Array<{ isActive: boolean; profitRate: { toString(): string } | null }>;
     globalSettings?: Array<{ isActive: boolean; profitRate: { toString(): string } | null }>;
   }) {
@@ -289,6 +295,8 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     expect(result.pricing.adjustmentAmount).toBeNull();
     expect(result.pricing.adjustmentSource).toBe('NONE');
     expect(result.pricing).not.toHaveProperty('finalSalePrice');
+    expect(result.pricing.cardSaleAvailable).toBe(false);
+    expect(result.pricing.cardSalePrice).toBeNull();
   });
 
   it('12 mm 10×250 ProductionYield master: 2100 tabaka ve NET 22', async () => {
@@ -586,6 +594,7 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
           effectiveTo: null,
           profitRate: null,
           adjustmentAmount: { toString: () => '1' },
+          cardSaleEnabled: true,
         },
       ],
     });
@@ -613,6 +622,11 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     expect(result.pricing.adjustmentAmount).toBe('1');
     expect(result.pricing.adjustmentSource).toBe('ROW_EXCEPTION');
     expect(result.pricing.publishedSalePrice).toBe('179');
+    expect(result.pricing.cardSaleAvailable).toBe(true);
+    expect(result.pricing.cardPricingType).toBe('FIXED_SURCHARGE');
+    expect(result.pricing.cardFixedSurchargeAmount).toBe('2');
+    expect(result.pricing.cardSalePrice).toBe('181');
+    expect(result.pricing.cardSalePrice).not.toBe('180');
     expect(
       toDecimal(result.pricing.publishedSalePrice).equals(
         toDecimal(result.pricing.roundedSalePrice).plus('1'),
@@ -652,6 +666,8 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     expect(result.pricing.adjustmentSource).toBe('ROW_EXCEPTION');
     expect(result.pricing.roundedSalePrice).toBe('150');
     expect(result.pricing.publishedSalePrice).toBe('151');
+    expect(result.pricing.cardSaleAvailable).toBe(false);
+    expect(result.pricing.cardSalePrice).toBeNull();
     expect(
       toDecimal(result.pricing.roundedSalePrice).equals(
         roundUpToWholeTl(result.pricing.priceBeforeRounding),
@@ -837,5 +853,81 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     );
     expect(result.pricing.profitRate).toBe('15');
     expect(result.pricing.profitRateSource).toBe('PRODUCT_PRICING_SETTING');
+  });
+
+  it('cardSaleEnabled=true satırda kart = nakit + 2', async () => {
+    const { service } = buildService({
+      mainYields: [
+        { rawMaterial: main9, netQty: 40, pieceWidthMm: 70, pieceLengthMm: 2200 },
+      ],
+      kilcikMasterNetQty: 66,
+      rowExceptions: [
+        {
+          isActive: true,
+          effectiveFrom: exceptionFrom,
+          effectiveTo: null,
+          profitRate: null,
+          adjustmentAmount: null,
+          cardSaleEnabled: true,
+        },
+      ],
+    });
+    const result = await service.getAyarliPervazMdfCost(
+      { productCode: 'AYARLI_PERVAZ', thicknessMm: 9, widthMm: 70, lengthMm: 2200 },
+      now,
+    );
+    expect(result.pricing.publishedSalePrice).toBe('87');
+    expect(result.pricing.cardSaleAvailable).toBe(true);
+    expect(result.pricing.cardSalePrice).toBe('89');
+    expect(result.pricing).not.toHaveProperty('cardMarkupRate');
+  });
+
+  it('cardFixed 2→3 yalnız kartı değiştirir; nakit aynı kalır', async () => {
+    const yields = {
+      mainYields: [
+        { rawMaterial: main18, netQty: 28, pieceWidthMm: 100, pieceLengthMm: 2200 },
+      ],
+      kilcikMasterNetQty: 50,
+      rowExceptions: [
+        {
+          isActive: true,
+          effectiveFrom: exceptionFrom,
+          effectiveTo: null,
+          profitRate: null,
+          adjustmentAmount: { toString: () => '1' },
+          cardSaleEnabled: true,
+        },
+      ],
+    };
+    const two = await buildService({
+      ...yields,
+      productSettings: [
+        {
+          isActive: true,
+          profitRate: { toString: () => '15' },
+          cardFixedSurchargeAmount: { toString: () => '2' },
+        },
+      ],
+    }).service.getAyarliPervazMdfCost(
+      { productCode: 'AYARLI_PERVAZ', thicknessMm: 18, widthMm: 100, lengthMm: 2200 },
+      now,
+    );
+    const three = await buildService({
+      ...yields,
+      productSettings: [
+        {
+          isActive: true,
+          profitRate: { toString: () => '15' },
+          cardFixedSurchargeAmount: { toString: () => '3' },
+        },
+      ],
+    }).service.getAyarliPervazMdfCost(
+      { productCode: 'AYARLI_PERVAZ', thicknessMm: 18, widthMm: 100, lengthMm: 2200 },
+      now,
+    );
+    expect(two.pricing.publishedSalePrice).toBe('179');
+    expect(three.pricing.publishedSalePrice).toBe('179');
+    expect(two.pricing.cardSalePrice).toBe('181');
+    expect(three.pricing.cardSalePrice).toBe('182');
   });
 });

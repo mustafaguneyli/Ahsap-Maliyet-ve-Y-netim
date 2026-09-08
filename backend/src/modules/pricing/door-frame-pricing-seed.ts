@@ -83,6 +83,7 @@ export async function seedDoorFramePricingSettings(
         vatRate: seed.vatRate,
         profitRate: seed.profitRate,
         cardMarkupRate: seed.cardMarkupRate,
+        cardFixedSurchargeAmount: null,
         productIsActive: product.isActive,
       });
 
@@ -93,6 +94,7 @@ export async function seedDoorFramePricingSettings(
           vatRate: new Decimal(seed.vatRate),
           profitRate: new Decimal(seed.profitRate),
           cardMarkupRate: new Decimal(seed.cardMarkupRate),
+          cardFixedSurchargeAmount: null,
           isActive: true,
         },
       });
@@ -115,6 +117,7 @@ export async function seedDoorFramePricingSettings(
       vatRate,
       profitRate,
       cardMarkupRate: seed.cardMarkupRate,
+      cardFixedSurchargeAmount: null,
       productIsActive: product.isActive,
     });
 
@@ -130,6 +133,7 @@ export async function seedDoorFramePricingSettings(
         vatRate: new Decimal(vatRate),
         profitRate: new Decimal(profitRate),
         cardMarkupRate: new Decimal(seed.cardMarkupRate),
+        cardFixedSurchargeAmount: null,
         isActive: true,
       },
     });

@@ -55,6 +55,7 @@ model Product {
   extraCostValues ExtraCostValue[]
   pricingSettings PricingSetting[]
   priceOverrides     PriceOverride[]
+  productionYields   ProductionYield[]
   pervazKilcikYields PervazKilcikYield[]
   pricingRowExceptions PricingRowException[]
 
@@ -122,6 +123,7 @@ model RawMaterialPrice {
 /// Doğrulanmış NET adet master datası. Formülle türetilmez.
 model ProductionYield {
   id            String   @id @default(uuid()) @db.Uuid
+  productId     String?  @map("product_id") @db.Uuid
   rawMaterialId String   @map("raw_material_id") @db.Uuid
   pieceWidthMm  Int      @map("piece_width_mm")
   pieceLengthMm Int      @map("piece_length_mm")
@@ -130,12 +132,13 @@ model ProductionYield {
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
+  product     Product?     @relation(fields: [productId], references: [id], onDelete: Restrict)
   rawMaterial RawMaterial  @relation(fields: [rawMaterialId], references: [id], onDelete: Restrict)
   recipeItems RecipeItem[]
 
   /// Normal unique kaldırıldı; tekillik partial unique index ile sağlanır:
-  /// production_yields_active_combination_unique (is_active=true kayıtlarda).
-  /// Böylece aynı MDF+ölçü için inactive eski kayıt korunabilir.
+  /// Generic kayıtlar productId=null; ürün bağlamlı Excel farkları productId ile tutulur.
+  /// Partial unique indexler aktif generic ve aktif product-scoped kayıtları ayrı korur.
   @@map("production_yields")
 }
 
@@ -156,8 +159,9 @@ model KilcikType {
   @@map("kilcik_types")
 }
 
-/// Pervaz kılçık NET. Excel MASTER tipten bağımsızdır (product + kalınlık + boy).
-/// kilcikTypeId yalnız MANUAL_VERIFIED / tipe özel kayıtlarda doldurulur.
+/// Pervaz kılçık NET. Excel MASTER anahtarı product + kalınlık + boydur.
+/// kilcikTypeId açıkça doğrulanmış varyantta (örn. GENİŞ KILÇIK) doldurulabilir;
+/// MANUAL_VERIFIED kayıtlarda zorunludur.
 /// Partial unique (migration SQL):
 /// - aktif EXCEL_MASTER: (product_id, pervaz_thickness_mm, piece_length_mm)
 /// - aktif MANUAL_VERIFIED + kilcik_type_id: (product_id, pervaz_thickness_mm, kilcik_type_id, piece_length_mm)
@@ -264,10 +268,14 @@ model PricingSetting {
   id             String   @id @default(uuid()) @db.Uuid
   productGroupId String?  @map("product_group_id") @db.Uuid
   productId      String?  @map("product_id") @db.Uuid
-  vatRate        Decimal? @map("vat_rate") @db.Decimal(8, 4)
-  profitRate     Decimal? @map("profit_rate") @db.Decimal(8, 4)
-  cardMarkupRate Decimal? @map("card_markup_rate") @db.Decimal(8, 4)
-  isActive       Boolean  @default(true) @map("is_active")
+  vatRate                  Decimal? @map("vat_rate") @db.Decimal(8, 4)
+  profitRate               Decimal? @map("profit_rate") @db.Decimal(8, 4)
+  /// Yüzde kart farkı (Kapı Kasası %20). Pervaz +2 TL burada tutulmaz.
+  cardMarkupRate           Decimal? @map("card_markup_rate") @db.Decimal(8, 4)
+  /// Sabit TL kart farkı (Pervaz Excel: nakit + 2). Kapı Kasası NULL.
+  /// cardMarkupRate ile aynı kayıtta birlikte dolu olamaz.
+  cardFixedSurchargeAmount Decimal? @map("card_fixed_surcharge_amount") @db.Decimal(14, 4)
+  isActive                 Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 
@@ -278,7 +286,7 @@ model PricingSetting {
   @@map("pricing_settings")
 }
 
-/// AYARLI_PERVAZ satır istisnası: özel kâr oranı ve/veya ROUNDUP sonrası relative adjustment.
+/// PERVAZ satır fiyatlandırması: özel kâr, dekoratif fark ve/veya ROUNDUP sonrası adjustment.
 /// Mutlak satış fiyatı (PriceOverride.cashPrice) değildir. Default %15 burada tekrar yazılmaz.
 /// Tekillik: migration SQL partial unique (aktif + açık dönem).
 model PricingRowException {
@@ -287,8 +295,12 @@ model PricingRowException {
   thicknessMm       Int       @map("thickness_mm")
   widthMm           Int       @map("width_mm")
   lengthMm          Int       @map("length_mm")
-  profitRate        Decimal?  @map("profit_rate") @db.Decimal(8, 4)
-  adjustmentAmount  Decimal?  @map("adjustment_amount") @db.Decimal(14, 4)
+  profitRate            Decimal? @map("profit_rate") @db.Decimal(8, 4)
+  decorativePremiumRate Decimal? @map("decorative_premium_rate") @db.Decimal(8, 4)
+  adjustmentAmount      Decimal? @map("adjustment_amount") @db.Decimal(14, 4)
+  /// TRUE: bu satır için kart fiyatı Excel’de doğrulanmış. NULL: default / doğrulanmamış.
+  /// FALSE: açıkça kart gösterme. AYARLI kart yayını yalnız TRUE kabul eder.
+  cardSaleEnabled       Boolean? @map("card_sale_enabled")
   isActive          Boolean   @default(true) @map("is_active")
   effectiveFrom     DateTime  @map("effective_from")
   effectiveTo       DateTime? @map("effective_to")

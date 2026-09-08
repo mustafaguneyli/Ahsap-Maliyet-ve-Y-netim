@@ -1,6 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { roundUpToWholeTl, toDecimal } from '../../common/decimal/decimal.util';
 import type { PervazQtySource } from '../../modules/pervaz/pervaz-qty-resolver';
+import {
+  applyPervazFixedCardSale,
+  type PervazCardSaleBreakdown,
+} from './pervaz-card-sale';
 
 export type AyarliPervazMdfPriceType = 'CARD_INSTALLMENT';
 
@@ -36,6 +40,10 @@ export type AyarliPervazMdfInput = {
   profitRate: string;
   /** Resolver’dan gelir; yoksa ROUNDUP sonrası ekleme yok. */
   adjustmentAmount?: string | null;
+  /** Product-level sabit TL; yüzde kart farkı kullanılmaz. */
+  cardFixedSurchargeAmount?: string | null;
+  /** Yalnız TRUE iken kart yayınlanır. */
+  cardSaleEnabled?: boolean | null;
 };
 
 export type AyarliPervazMdfPartResult = {
@@ -57,7 +65,7 @@ export type AyarliPervazPricingBreakdown = {
   adjustmentAmount: string | null;
   /** roundedSalePrice + adjustmentAmount (adjustment yoksa rounded). */
   publishedSalePrice: string;
-};
+} & PervazCardSaleBreakdown;
 
 export type AyarliPervazMdfResult = {
   productCode: string;
@@ -80,6 +88,7 @@ export type AyarliPervazMdfResult = {
  * profitRate / adjustmentAmount input’tan gelir; satır if/thickness hardcode yok.
  * roundedSalePrice = ROUNDUP(priceBeforeRounding, 0) — roundUpToWholeTl.
  * publishedSalePrice = roundedSalePrice + adjustmentAmount (ROUNDUP sonrası).
+ * Kart: cardSaleEnabled === true ise publishedSalePrice + cardFixedSurchargeAmount; ROUNDUP yok.
  */
 export class AyarliPervazMdfCalculator {
   calculate(input: AyarliPervazMdfInput): AyarliPervazMdfResult {
@@ -88,7 +97,13 @@ export class AyarliPervazMdfCalculator {
     const totalMdfCost = toDecimal(mainPiece.unitCost).plus(toDecimal(kilcik.unitCost));
     const extraCosts = this.sumExtraCosts(input.extraCosts);
     const productionCost = totalMdfCost.plus(toDecimal(extraCosts.total));
-    const pricing = this.applyProfit(productionCost, input.profitRate, input.adjustmentAmount);
+    const pricing = this.applyProfit(
+      productionCost,
+      input.profitRate,
+      input.adjustmentAmount,
+      input.cardFixedSurchargeAmount,
+      input.cardSaleEnabled === true,
+    );
 
     return {
       productCode: input.productCode,
@@ -107,7 +122,9 @@ export class AyarliPervazMdfCalculator {
   private applyProfit(
     productionCost: ReturnType<typeof toDecimal>,
     profitRateRaw: string,
-    adjustmentAmountRaw?: string | null,
+    adjustmentAmountRaw: string | null | undefined,
+    cardFixedSurchargeAmount: string | null | undefined,
+    cardSaleAvailable: boolean,
   ): AyarliPervazPricingBreakdown {
     const profitRate = this.parseProfitRate(profitRateRaw);
     const hundred = toDecimal(100);
@@ -116,6 +133,11 @@ export class AyarliPervazMdfCalculator {
     const roundedSalePrice = roundUpToWholeTl(priceBeforeRounding);
     const adjustment = this.parseAdjustmentAmount(adjustmentAmountRaw);
     const publishedSalePrice = roundedSalePrice.plus(adjustment.amount);
+    const card = applyPervazFixedCardSale({
+      publishedCashPrice: publishedSalePrice.toFixed(),
+      cardFixedSurchargeAmount,
+      cardSaleAvailable,
+    });
     return {
       profitRate: profitRate.toFixed(),
       profitAmount: profitAmount.toFixed(),
@@ -123,6 +145,7 @@ export class AyarliPervazMdfCalculator {
       roundedSalePrice: roundedSalePrice.toFixed(),
       adjustmentAmount: adjustment.applied ? adjustment.amount.toFixed() : null,
       publishedSalePrice: publishedSalePrice.toFixed(),
+      ...card,
     };
   }
 

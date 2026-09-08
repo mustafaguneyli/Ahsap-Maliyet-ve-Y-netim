@@ -36,3 +36,71 @@ export function updateDoorFramePricingSetting(
     },
   );
 }
+
+export type AyarliPervazPricingSetting = {
+  productGroupCode: 'PERVAZ';
+  productCode:
+    | 'AYARLI_PERVAZ'
+    | 'DEKORATIF_PERVAZ'
+    | 'DEKORATIF_PERVAZ_GENIS_KILCIK';
+  productName: string;
+  settingId: string;
+  vatRate: null;
+  profitRate: string;
+  cardMarkupRate: null;
+  cardFixedSurchargeAmount: string | null;
+  isActive: boolean;
+};
+
+export function getAyarliPervazPricingSetting() {
+  return apiRequest<AyarliPervazPricingSetting>(
+    '/pricing-settings/pervaz/AYARLI_PERVAZ',
+  );
+}
+
+export function updateAyarliPervazPricingSetting(profitRate: string) {
+  return apiRequest<AyarliPervazPricingSetting>(
+    '/pricing-settings/pervaz/AYARLI_PERVAZ',
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        productGroup: 'PERVAZ',
+        profitRate,
+      }),
+    },
+  );
+}
+
+export function getPervazPricingSetting(
+  productCode:
+    | 'AYARLI_PERVAZ'
+    | 'DEKORATIF_PERVAZ'
+    | 'DEKORATIF_PERVAZ_GENIS_KILCIK',
+) {
+  return apiRequest<AyarliPervazPricingSetting>(
+    `/pricing-settings/pervaz/${productCode}`,
+  );
+}
+
+export function updatePervazPricingSetting(
+  productCode:
+    | 'AYARLI_PERVAZ'
+    | 'DEKORATIF_PERVAZ'
+    | 'DEKORATIF_PERVAZ_GENIS_KILCIK',
+  profitRate: string,
+  cardFixedSurchargeAmount?: string,
+) {
+  return apiRequest<AyarliPervazPricingSetting>(
+    `/pricing-settings/pervaz/${productCode}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        productGroup: 'PERVAZ',
+        profitRate,
+        ...(cardFixedSurchargeAmount != null && cardFixedSurchargeAmount !== ''
+          ? { cardFixedSurchargeAmount }
+          : {}),
+      }),
+    },
+  );
+}

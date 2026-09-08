@@ -34,6 +34,23 @@ describe('assertPricingRowException', () => {
     ).not.toThrow();
   });
 
+  it('yalnız cardSaleEnabled=true kabul eder', () => {
+    expect(() =>
+      assertPricingRowException({
+        productId: 'p-ayarli',
+        thicknessMm: 9,
+        widthMm: 70,
+        lengthMm: 2200,
+        profitRate: null,
+        adjustmentAmount: null,
+        cardSaleEnabled: true,
+        effectiveFrom: from,
+        effectiveTo: null,
+        productIsActive: true,
+      }),
+    ).not.toThrow();
+  });
+
   it('ikisi de null ise reddeder', () => {
     expect(() =>
       assertPricingRowException({
