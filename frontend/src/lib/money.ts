@@ -15,6 +15,31 @@ export function formatTry(value: string | null | undefined): string {
   return `${negative ? '-' : ''}₺${grouped},${frac}`;
 }
 
+/**
+ * Para gösterimi için Decimal stringini iki ondalığa yuvarlar.
+ * Number dönüşümü yapmaz ve kaynak/API değerini değiştirmez.
+ */
+export function formatTryTwoDecimals(
+  value: string | null | undefined,
+): string {
+  if (value == null || value === '') return '—';
+
+  const match = /^([+-]?)(\d+)(?:\.(\d*))?$/.exec(value.trim());
+  if (!match) return '—';
+
+  const negative = match[1] === '-';
+  const whole = BigInt(match[2]);
+  const fraction = match[3] ?? '';
+  const cents = BigInt(`${fraction}00`.slice(0, 2));
+  const roundsUp = (fraction[2] ?? '0') >= '5';
+  const roundedCents = whole * 100n + cents + (roundsUp ? 1n : 0n);
+  const roundedWhole = (roundedCents / 100n).toString();
+  const roundedFraction = (roundedCents % 100n).toString().padStart(2, '0');
+  const grouped = roundedWhole.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+  return `${negative && roundedCents !== 0n ? '-' : ''}₺${grouped},${roundedFraction}`;
+}
+
 /** Oran gösterimi — hesap yapmaz. "0" → "%0", "10" → "%10" */
 export function formatPercentRate(value: string | null | undefined): string {
   if (value == null || value === '') return '—';

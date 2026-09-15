@@ -29,6 +29,15 @@ export type UpdatePricesPayload = {
   effectiveFrom: string;
 };
 
+export type UpdateCardInstallmentPricePayload = {
+  price: string;
+};
+
+export type UpdateCardInstallmentPriceResponse = {
+  changed: boolean;
+  material: RawMaterial;
+};
+
 function toQuery(params: ListRawMaterialsParams): string {
   const search = new URLSearchParams();
   if (params.isActive !== undefined) search.set('isActive', String(params.isActive));
@@ -50,4 +59,17 @@ export function updateRawMaterialPrices(
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+export function updateRawMaterialCardInstallmentPrice(
+  id: string,
+  payload: UpdateCardInstallmentPricePayload,
+): Promise<UpdateCardInstallmentPriceResponse> {
+  return apiRequest<UpdateCardInstallmentPriceResponse>(
+    `/raw-materials/${id}/prices/card-installment`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
 }

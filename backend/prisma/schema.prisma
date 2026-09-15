@@ -25,6 +25,11 @@ enum PervazKilcikYieldSource {
   MANUAL_VERIFIED
 }
 
+/// Kalınlık bazlı ticari fiyat modifier türü. Maliyet kalemi değildir.
+enum PricingModifierType {
+  DECORATIVE
+}
+
 /// Ürün grubu (ör. door_frame). Hesaplama stratejisi gruba bağlıdır; her grup recipe kullanmak zorunda değildir.
 model ProductGroup {
   id        String   @id @default(uuid()) @db.Uuid
@@ -37,6 +42,7 @@ model ProductGroup {
   products        Product[]
   extraCostValues ExtraCostValue[]
   pricingSettings PricingSetting[]
+  pricingThicknessModifiers PricingThicknessModifier[]
 
   @@map("product_groups")
 }
@@ -284,6 +290,28 @@ model PricingSetting {
 
   @@index([productGroupId, productId])
   @@map("pricing_settings")
+}
+
+/// Grup + kalınlık bazlı ticari fiyat modifier'ı.
+/// Süpürgelik dekoratif oranı enlerden bağımsız olduğu için PricingRowException'a
+/// beş kez kopyalanmaz; gelecekte dekoratif PP aynı grup kuralını reuse edebilir.
+/// Tekillik migration SQL'indeki aktif + açık dönem partial unique index ile korunur.
+model PricingThicknessModifier {
+  id             String              @id @default(uuid()) @db.Uuid
+  productGroupId String              @map("product_group_id") @db.Uuid
+  modifierType   PricingModifierType @map("modifier_type")
+  thicknessMm    Int                 @map("thickness_mm")
+  rate           Decimal             @db.Decimal(8, 4)
+  isActive       Boolean             @default(true) @map("is_active")
+  effectiveFrom  DateTime            @map("effective_from")
+  effectiveTo    DateTime?           @map("effective_to")
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+
+  productGroup ProductGroup @relation(fields: [productGroupId], references: [id], onDelete: Restrict)
+
+  @@index([productGroupId, modifierType, thicknessMm], map: "pricing_thickness_modifiers_context_idx")
+  @@map("pricing_thickness_modifiers")
 }
 
 /// PERVAZ satır fiyatlandırması: özel kâr, dekoratif fark ve/veya ROUNDUP sonrası adjustment.

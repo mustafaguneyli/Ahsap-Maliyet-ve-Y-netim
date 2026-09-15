@@ -22,13 +22,14 @@ import {
 import { ApiError } from '../lib/api';
 import { formatPercentRate, formatTry } from '../lib/money';
 import { PervazCostTable } from '../components/pervaz-cost-table';
+import { SupurgelikCostList } from '../components/supurgelik-cost-list';
 import {
   deactivateDoorFrameCashOverride,
   upsertDoorFrameCashOverride,
 } from '../api/price-overrides-api';
 import './cost-calculation-page.css';
 
-type ProductGroup = 'door_frame' | 'PERVAZ';
+type ProductGroup = 'door_frame' | 'PERVAZ' | 'SUPURGELIK';
 type DoorFrameVariant = '34_MM' | '30_MM';
 type PervazProduct =
   | 'AYARLI_PERVAZ'
@@ -58,6 +59,26 @@ const EXTRA_LABELS: Record<keyof ExtraForm, string> = {
 
 const EXTRA_ORDER: Array<keyof ExtraForm> = ['CUTTING', 'GLUE', 'LABOR', 'OTHER'];
 const PERVAZ_EXTRA_ORDER: Array<keyof ExtraForm> = ['CUTTING', 'GLUE', 'LABOR'];
+
+const PERVAZ_PRODUCT_META: Record<
+  PervazProduct,
+  { label: string; description: string }
+> = {
+  AYARLI_PERVAZ: {
+    label: 'Ayarlı Pervaz',
+    description: 'Standart ayarlı seri',
+  },
+  DEKORATIF_PERVAZ: {
+    label: 'Dekoratif Pervaz',
+    description: 'Dekoratif fiyat farkı',
+  },
+  DEKORATIF_PERVAZ_GENIS_KILCIK: {
+    label: 'Geniş Kılçık',
+    description: 'Kartsız özel seri',
+  },
+};
+
+const PERVAZ_PRODUCTS = Object.keys(PERVAZ_PRODUCT_META) as PervazProduct[];
 
 function todayIsoDate(): string {
   const now = new Date();
@@ -97,6 +118,8 @@ export function CostCalculationPage() {
   const [variant, setVariant] = useState<DoorFrameVariant>('34_MM');
   const [pervazProduct, setPervazProduct] =
     useState<PervazProduct>('AYARLI_PERVAZ');
+  const [pervazQuery, setPervazQuery] = useState('');
+  const [pervazThickness, setPervazThickness] = useState('ALL');
   const [data, setData] = useState<DoorFrameMdfResponse | null>(null);
   const [pervazData, setPervazData] =
     useState<
@@ -144,15 +167,51 @@ export function CostCalculationPage() {
   );
   const activeExtraOrder =
     productGroup === 'PERVAZ' ? PERVAZ_EXTRA_ORDER : EXTRA_ORDER;
-  const pervazProductLabel =
-    pervazProduct === 'AYARLI_PERVAZ'
-      ? 'Ayarlı Pervaz'
-      : pervazProduct === 'DEKORATIF_PERVAZ'
-        ? 'Dekoratif Pervaz'
-        : 'Dekoratif Pervaz - Geniş Kılçık';
+  const pervazProductLabel = PERVAZ_PRODUCT_META[pervazProduct].label;
   const canEditPervazCardFixed =
     productGroup === 'PERVAZ' &&
     (pervazProduct === 'AYARLI_PERVAZ' || pervazProduct === 'DEKORATIF_PERVAZ');
+
+  const pervazThicknesses = useMemo(
+    () =>
+      Array.from(new Set((pervazData?.rows ?? []).map((row) => row.thicknessMm))).sort(
+        (a, b) => a - b,
+      ),
+    [pervazData],
+  );
+
+  const filteredPervazRows = useMemo(() => {
+    const normalizedQuery = pervazQuery
+      .toLocaleLowerCase('tr-TR')
+      .replace(/[×x\s-]/g, '');
+
+    return (pervazData?.rows ?? []).filter((row) => {
+      if (
+        pervazThickness !== 'ALL' &&
+        String(row.thicknessMm) !== pervazThickness
+      ) {
+        return false;
+      }
+      if (!normalizedQuery) return true;
+
+      const searchable = [
+        `${row.widthMm / 10}x${row.lengthMm / 10}`,
+        `${row.thicknessMm}mm`,
+        row.mainPiece.rawMaterialCode,
+      ]
+        .join(' ')
+        .toLocaleLowerCase('tr-TR')
+        .replace(/[×x\s-]/g, '');
+      return searchable.includes(normalizedQuery);
+    });
+  }, [pervazData, pervazQuery, pervazThickness]);
+
+  const pervazCardRowCount = useMemo(
+    () =>
+      (pervazData?.rows ?? []).filter((row) => row.pricing.cardSaleAvailable)
+        .length,
+    [pervazData],
+  );
 
   const reloadCosts = async (targetVariant: DoorFrameVariant = variant) => {
     setLoading(true);
@@ -253,6 +312,11 @@ export function CostCalculationPage() {
       cancelled = true;
     };
   }, [productGroup, pervazProduct]);
+
+  useEffect(() => {
+    setPervazQuery('');
+    setPervazThickness('ALL');
+  }, [pervazProduct]);
 
   useEffect(() => {
     if (!notice) return;
@@ -442,6 +506,7 @@ export function CostCalculationPage() {
   const onSaveSettings = async (event: FormEvent) => {
     event.preventDefault();
     setFormError(null);
+    if (productGroup === 'SUPURGELIK') return;
 
     for (const code of activeExtraOrder) {
       const amount = normalizeDecimalInput(extraForm[code]);
@@ -549,27 +614,9 @@ export function CostCalculationPage() {
           >
             <option value="door_frame">Kapı Kasası</option>
             <option value="PERVAZ">Pervaz</option>
+            <option value="SUPURGELIK">Süpürgelik</option>
           </select>
         </label>
-
-        {productGroup === 'PERVAZ' ? (
-          <label className="cc-field cc-product-field">
-            <span>Ürün</span>
-            <select
-              className="cc-select"
-              value={pervazProduct}
-              onChange={(e) =>
-                setPervazProduct(e.target.value as PervazProduct)
-              }
-            >
-              <option value="AYARLI_PERVAZ">Ayarlı Pervaz</option>
-              <option value="DEKORATIF_PERVAZ">Dekoratif Pervaz</option>
-              <option value="DEKORATIF_PERVAZ_GENIS_KILCIK">
-                Dekoratif Pervaz - Geniş Kılçık
-              </option>
-            </select>
-          </label>
-        ) : null}
 
         {productGroup === 'door_frame' || productGroup === 'PERVAZ' ? (
           <button
@@ -582,6 +629,36 @@ export function CostCalculationPage() {
           </button>
         ) : null}
       </div>
+
+      {productGroup === 'PERVAZ' ? (
+        <div
+          className="cc-pervaz-product-tabs"
+          role="tablist"
+          aria-label="Pervaz ürünü"
+        >
+          {PERVAZ_PRODUCTS.map((productCode) => {
+            const meta = PERVAZ_PRODUCT_META[productCode];
+            const active = pervazProduct === productCode;
+            return (
+              <button
+                key={productCode}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                className={
+                  active
+                    ? 'cc-pervaz-product-tab active'
+                    : 'cc-pervaz-product-tab'
+                }
+                onClick={() => setPervazProduct(productCode)}
+              >
+                <span>{meta.label}</span>
+                <small>{meta.description}</small>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       {productGroup === 'door_frame' ? (
         <>
@@ -816,25 +893,43 @@ export function CostCalculationPage() {
 
       {productGroup === 'PERVAZ' ? (
           <>
-            <div className="cc-list-heading">
-              <div>
-                <strong>
-                  {pervazProductLabel}
-                </strong>
-                <span>
-                  {pervazData
-                    ? `${pervazData.verifiedMeasureCount} doğrulanmış ölçü`
-                    : 'Doğrulanmış master ölçüler'}
-                </span>
+            <div className="cc-pervaz-overview">
+              <div className="cc-pervaz-overview-main">
+                <div>
+                  <span className="cc-pervaz-eyebrow">Pervaz fiyat listesi</span>
+                  <h2>{pervazProductLabel}</h2>
+                  <p>{PERVAZ_PRODUCT_META[pervazProduct].description}</p>
+                </div>
+                <button
+                  type="button"
+                  className="cc-btn cc-btn-sm"
+                  onClick={() => void reloadPervazCosts()}
+                  disabled={loading}
+                >
+                  {loading ? 'Yükleniyor…' : 'Listeyi Yenile'}
+                </button>
               </div>
-              <button
-                type="button"
-                className="cc-btn cc-btn-sm"
-                onClick={() => void reloadPervazCosts()}
-                disabled={loading}
-              >
-                {loading ? 'Yükleniyor…' : 'Yenile'}
-              </button>
+
+              <div className="cc-pervaz-stats" aria-label="Pervaz liste özeti">
+                <div className="cc-pervaz-stat">
+                  <span>Doğrulanmış ölçü</span>
+                  <strong>{pervazData?.verifiedMeasureCount ?? '—'}</strong>
+                </div>
+                <div className="cc-pervaz-stat">
+                  <span>Kartlı satır</span>
+                  <strong>
+                    {pervazData
+                      ? pervazProduct === 'DEKORATIF_PERVAZ_GENIS_KILCIK'
+                        ? 'Yok'
+                        : pervazCardRowCount
+                      : '—'}
+                  </strong>
+                </div>
+                <div className="cc-pervaz-stat">
+                  <span>NET kaynağı</span>
+                  <strong>MASTER öncelikli</strong>
+                </div>
+              </div>
             </div>
 
             <p className="cc-note">
@@ -846,6 +941,54 @@ export function CostCalculationPage() {
                 : ', ROUNDUP ve varsa satır düzeltmesi'}
               {' ile '}her istekte yeniden hesaplanır.
             </p>
+
+            <div className="cc-pervaz-filters" aria-label="Pervaz liste filtreleri">
+              <label className="cc-field cc-pervaz-search-field">
+                <span>Ölçü ara</span>
+                <input
+                  className="cc-input"
+                  type="search"
+                  value={pervazQuery}
+                  onChange={(event) => setPervazQuery(event.target.value)}
+                  placeholder="Örn. 10×220"
+                />
+              </label>
+              <label className="cc-field cc-pervaz-thickness-field">
+                <span>Kalınlık</span>
+                <select
+                  className="cc-select"
+                  value={pervazThickness}
+                  onChange={(event) => setPervazThickness(event.target.value)}
+                >
+                  <option value="ALL">Tümü</option>
+                  {pervazThicknesses.map((thickness) => (
+                    <option key={thickness} value={String(thickness)}>
+                      {thickness} mm
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="cc-pervaz-filter-result" aria-live="polite">
+                <strong>{filteredPervazRows.length}</strong>
+                <span>
+                  {pervazData
+                    ? ` / ${pervazData.verifiedMeasureCount} satır gösteriliyor`
+                    : ' satır'}
+                </span>
+              </div>
+              {pervazQuery || pervazThickness !== 'ALL' ? (
+                <button
+                  type="button"
+                  className="cc-btn cc-btn-sm cc-pervaz-clear"
+                  onClick={() => {
+                    setPervazQuery('');
+                    setPervazThickness('ALL');
+                  }}
+                >
+                  Filtreyi Temizle
+                </button>
+              ) : null}
+            </div>
 
             {notice ? <div className="cc-notice">{notice}</div> : null}
             {error ? (
@@ -882,6 +1025,20 @@ export function CostCalculationPage() {
                     Yenile
                   </button>
                 </div>
+              ) : filteredPervazRows.length === 0 ? (
+                <div className="cc-empty">
+                  <p>Bu filtrelerle eşleşen Pervaz ölçüsü yok.</p>
+                  <button
+                    type="button"
+                    className="cc-btn cc-btn-sm"
+                    onClick={() => {
+                      setPervazQuery('');
+                      setPervazThickness('ALL');
+                    }}
+                  >
+                    Filtreyi Temizle
+                  </button>
+                </div>
               ) : (
                 <PervazCostTable
                   mode={
@@ -889,12 +1046,14 @@ export function CostCalculationPage() {
                       ? 'ayarli'
                       : 'dekoratif'
                   }
-                  rows={pervazData.rows}
+                  rows={filteredPervazRows}
                 />
               )}
             </div>
           </>
       ) : null}
+
+      {productGroup === 'SUPURGELIK' ? <SupurgelikCostList /> : null}
 
       {drawerOpen ? (
         <div className="cc-drawer-overlay" onClick={closeDrawer} role="presentation">

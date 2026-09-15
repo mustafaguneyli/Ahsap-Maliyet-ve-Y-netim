@@ -12,6 +12,7 @@ import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ListRawMaterialsQueryDto } from './dto/list-raw-materials-query.dto';
 import { UpdateRawMaterialDto } from './dto/update-raw-material.dto';
 import { UpdateRawMaterialPricesDto } from './dto/update-raw-material-prices.dto';
+import { UpdateCardInstallmentPriceDto } from './dto/update-card-installment-price.dto';
 
 const ENTITY_TYPE = 'RawMaterial';
 const PRICE_ENTITY_TYPE = 'RawMaterialPrice';
@@ -31,6 +32,11 @@ export type RawMaterialListItem = {
   lastPriceUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
+};
+
+export type RawMaterialCardPriceUpdateResult = {
+  changed: boolean;
+  material: RawMaterialListItem;
 };
 
 @Injectable()
@@ -289,6 +295,47 @@ export class RawMaterialsService {
     return this.findOne(id);
   }
 
+  /**
+   * Tek CARD_INSTALLMENT kaynağını version/history + audit ile değiştirir.
+   * İlk fiyatı destekler; aynı Decimal değer gönderilirse yeni dönem açmaz.
+   */
+  async updateCardInstallmentPrice(
+    id: string,
+    dto: UpdateCardInstallmentPriceDto,
+    now: Date = new Date(),
+  ): Promise<RawMaterialCardPriceUpdateResult> {
+    let price: ReturnType<typeof toDecimal>;
+    try {
+      price = toDecimal(dto.price);
+    } catch {
+      throw new BadRequestException(
+        'Kart / Taksit fiyatı geçerli bir Decimal olmalıdır.',
+      );
+    }
+    if (!price.isFinite() || price.lte(0)) {
+      throw new BadRequestException('Kart / Taksit fiyatı 0’dan büyük olmalıdır.');
+    }
+
+    const changed = await this.prisma.$transaction(async (tx) => {
+      const material = await tx.rawMaterial.findUnique({ where: { id } });
+      if (!material) {
+        throw new NotFoundException(`Ham madde bulunamadı: ${id}`);
+      }
+
+      return this.replaceOpenPrice(tx, {
+        rawMaterialId: id,
+        priceType: MaterialPriceType.CARD_INSTALLMENT,
+        newPrice: price,
+        effectiveFrom: now,
+      });
+    });
+
+    return {
+      changed,
+      material: await this.findOne(id),
+    };
+  }
+
   private async replaceOpenPrice(
     tx: Prisma.TransactionClient,
     params: {
@@ -297,7 +344,7 @@ export class RawMaterialsService {
       newPrice: ReturnType<typeof toDecimal>;
       effectiveFrom: Date;
     },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const open = await tx.rawMaterialPrice.findFirst({
       where: {
         rawMaterialId: params.rawMaterialId,
@@ -308,6 +355,9 @@ export class RawMaterialsService {
     });
 
     if (open) {
+      if (toDecimal(open.price.toString()).equals(params.newPrice)) {
+        return false;
+      }
       if (params.effectiveFrom <= open.effectiveFrom) {
         throw new BadRequestException(
           'Yeni geçerlilik tarihi, mevcut açık fiyat döneminin başlangıcından sonra olmalıdır.',
@@ -356,6 +406,8 @@ export class RawMaterialsService {
       },
       tx,
     );
+
+    return true;
   }
 
   private parseEffectiveFromDate(value: string): Date {

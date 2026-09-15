@@ -17,16 +17,22 @@ import {
   type DekoratifPervazInput,
   type DekoratifPervazResult,
 } from './calculators/dekoratif-pervaz-calculator';
+import {
+  SupurgelikMdfCalculator,
+  type SupurgelikMdfInput,
+  type SupurgelikMdfResult,
+} from './calculators/supurgelik-mdf-calculator';
 
 /**
  * İnce yönlendirici. Mega-engine / abstract factory yoktur.
- * door_frame → DoorFrameCalculator. AYARLI_PERVAZ MDF + PERVAZ extra costs → AyarliPervazMdfCalculator.
+ * Ürün aileleri kendi küçük calculator'larına yönlendirilir.
  */
 export class CalculationEngine {
   constructor(
     private readonly doorFrameCalculator = new DoorFrameCalculator(),
     private readonly ayarliPervazMdfCalculator = new AyarliPervazMdfCalculator(),
     private readonly dekoratifPervazCalculator = new DekoratifPervazCalculator(),
+    private readonly supurgelikMdfCalculator = new SupurgelikMdfCalculator(),
   ) {}
 
   calculateDoorFrameMdfCosts(sizes: DoorFrameSizeCostInput[]): DoorFrameMdfSizeResult[] {
@@ -72,6 +78,10 @@ export class CalculationEngine {
     input: DekoratifPervazInput,
   ): DekoratifPervazResult {
     return this.dekoratifPervazCalculator.calculate(input);
+  }
+
+  calculateSupurgelikMdf(input: SupurgelikMdfInput): SupurgelikMdfResult {
+    return this.supurgelikMdfCalculator.calculate(input);
   }
 
   calculate(

@@ -71,6 +71,7 @@ export type AyarliPervazYieldSeedReport = {
     existingNetQty: number;
   }>;
   missingMaterials: string[];
+  missingProduct: boolean;
   totalExpected: number;
 };
 
@@ -84,8 +85,27 @@ export async function seedAyarliPervazProductionYields(
     unchanged: 0,
     conflicts: [],
     missingMaterials: [],
+    missingProduct: false,
     totalExpected: rows.length,
   };
+
+  const group = await prisma.productGroup.findUnique({
+    where: { code: 'PERVAZ' },
+  });
+  const product = group
+    ? await prisma.product.findUnique({
+        where: {
+          productGroupId_code: {
+            productGroupId: group.id,
+            code: 'AYARLI_PERVAZ',
+          },
+        },
+      })
+    : null;
+  if (!group?.isActive || !product?.isActive) {
+    report.missingProduct = true;
+    return report;
+  }
 
   const materialCache = new Map<string, string>();
 
@@ -105,7 +125,7 @@ export async function seedAyarliPervazProductionYields(
 
     const active = await prisma.productionYield.findFirst({
       where: {
-        productId: null,
+        productId: product.id,
         rawMaterialId: materialId,
         pieceWidthMm: row.pieceWidthMm,
         pieceLengthMm: row.pieceLengthMm,
@@ -130,7 +150,7 @@ export async function seedAyarliPervazProductionYields(
 
     await prisma.productionYield.create({
       data: {
-        productId: null,
+        productId: product.id,
         rawMaterialId: materialId,
         pieceWidthMm: row.pieceWidthMm,
         pieceLengthMm: row.pieceLengthMm,

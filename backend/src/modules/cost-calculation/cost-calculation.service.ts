@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { MaterialPriceType } from '@prisma/client';
+import { MaterialPriceType, PricingModifierType } from '@prisma/client';
 import { CalculationEngine } from '../../calculation-engine/calculation-engine';
+import { toDecimal } from '../../common/decimal/decimal.util';
 import type {
   AyarliPervazExtraCostsInput,
   AyarliPervazMdfInput,
@@ -11,6 +12,17 @@ import type {
 } from '../../calculation-engine/calculators/door-frame-calculator';
 import type { DekoratifPervazProductCode } from '../../calculation-engine/calculators/dekoratif-pervaz-calculator';
 import {
+  isSupurgelikDecorativeProduct,
+  isSupurgelikPpProduct,
+  SUPURGELIK_PP_WRAPPING_COST_MISSING,
+  SUPURGELIK_PRODUCT_CODES,
+  type SupurgelikDecorativePricingInput,
+  type SupurgelikExtraCostInput,
+  type SupurgelikDuzPricingInput,
+  type SupurgelikMdfInput,
+  type SupurgelikProductCode,
+} from '../../calculation-engine/calculators/supurgelik-mdf-calculator';
+import {
   DoorFrameVariantCode,
   formatDoorFrameSizeLabel,
   getDoorFrameSizes,
@@ -18,6 +30,7 @@ import {
   getSecondary12MaterialCode,
 } from '../../calculation-engine/calculators/door-frame-variants';
 import { ExtraCostListResponse, ExtraCostsService } from '../extra-costs/extra-costs.service';
+import { SUPURGELIK_EXTRA_COST_TYPE_ORDER } from '../extra-costs/supurgelik-extra-cost-seed';
 import { AYARLI_PERVAZ_KILCIK_MATERIAL_CODE } from '../pervaz/ayarli-pervaz-kilcik-yield-seed';
 import {
   resolveAyarliPervazAdjustment,
@@ -33,9 +46,28 @@ import {
 } from '../price-overrides/apply-published-sale-prices';
 import { PrismaService } from '../../prisma/prisma.service';
 import { selectCurrentMaterialPrice } from './current-material-price';
-import { buildAyarliPervazYieldSeedRows } from '../production-yields/pervaz-ayarli-yield-seed-data';
-import { DEKORATIF_PERVAZ_YIELD_SEEDS } from '../production-yields/pervaz-dekoratif-yield-seed-data';
-import { DEKORATIF_GENIS_KILCIK_YIELD_SEEDS } from '../production-yields/pervaz-dekoratif-genis-kilcik-yield-seed-data';
+import {
+  SUPURGELIK_DECORATIVE_RATE_MISSING,
+  SupurgelikRawMaterialPriceMissingException,
+  supurgelikDecorativeRateMissingMessage,
+  supurgelikPpWrappingCostMissingMessage,
+} from './supurgelik-mdf.errors';
+import {
+  type ActiveProductMasterRow,
+  discoverActiveProductMasterRows,
+} from '../production-yields/active-product-master-discovery';
+
+type SupurgelikExtraCostContext = {
+  items: SupurgelikExtraCostInput[];
+  totalAmount: string;
+};
+
+type SupurgelikDuzPricingContext = SupurgelikDuzPricingInput;
+type SupurgelikDecorativeRateContext = Pick<
+  SupurgelikDecorativePricingInput,
+  'decorativeRate' | 'decorativeRateSource'
+>;
+type SupurgelikDecorativeRateMap = Map<number, SupurgelikDecorativeRateContext>;
 
 @Injectable()
 export class CostCalculationService {
@@ -184,6 +216,339 @@ export class CostCalculationService {
           },
         };
       }),
+    };
+  }
+
+  /**
+   * Süpürgelik tek ölçü temel MDF maliyeti.
+   * Aktif generic MASTER ve ona bağlı güncel CARD_INSTALLMENT fiyatı kullanılır.
+   */
+  async getSupurgelikMdfCost(
+    input: {
+      productCode: SupurgelikProductCode;
+      thicknessMm: number;
+      widthMm: number;
+      lengthMm: number;
+    },
+    now: Date = new Date(),
+    prefetchedExtraCosts?: SupurgelikExtraCostContext,
+    prefetchedPricing?: SupurgelikDuzPricingContext,
+    prefetchedDecorativeRates?: SupurgelikDecorativeRateMap,
+    prefetchedPpWrappingCost?: string | null,
+  ) {
+    if (!SUPURGELIK_PRODUCT_CODES.includes(input.productCode)) {
+      throw new BadRequestException('Geçersiz Süpürgelik productCode.');
+    }
+    for (const [field, value] of [
+      ['thicknessMm', input.thicknessMm],
+      ['widthMm', input.widthMm],
+      ['lengthMm', input.lengthMm],
+    ] as const) {
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new BadRequestException(`${field} pozitif tam sayı olmalıdır.`);
+      }
+    }
+
+    const group = await this.prisma.productGroup.findUnique({
+      where: { code: 'SUPURGELIK' },
+    });
+    const product = group
+      ? await this.prisma.product.findUnique({
+          where: {
+            productGroupId_code: {
+              productGroupId: group.id,
+              code: input.productCode,
+            },
+          },
+        })
+      : null;
+    if (!group?.isActive || !product?.isActive) {
+      throw new NotFoundException(`Aktif Süpürgelik ürünü bulunamadı: ${input.productCode}`);
+    }
+
+    const masters = await this.prisma.productionYield.findMany({
+      where: {
+        productId: null,
+        isActive: true,
+        pieceWidthMm: input.widthMm,
+        pieceLengthMm: input.lengthMm,
+        rawMaterial: {
+          isActive: true,
+          thicknessMm: input.thicknessMm,
+        },
+      },
+      include: {
+        rawMaterial: {
+          include: {
+            prices: {
+              where: {
+                priceType: MaterialPriceType.CARD_INSTALLMENT,
+                isActive: true,
+              },
+              orderBy: { effectiveFrom: 'desc' },
+            },
+          },
+        },
+      },
+    });
+
+    const context = `${input.thicknessMm} mm / ${input.widthMm}×${input.lengthMm}`;
+    if (masters.length === 0) {
+      throw new NotFoundException(
+        `Aktif generic Süpürgelik ProductionYield MASTER bulunamadı: ${context}`,
+      );
+    }
+    if (masters.length > 1) {
+      throw new BadRequestException(
+        `Birden fazla aktif generic Süpürgelik ProductionYield bulundu: ${context}`,
+      );
+    }
+
+    const master = masters[0];
+    const material = master.rawMaterial;
+    const currentPrice = selectCurrentMaterialPrice(
+      material.prices,
+      MaterialPriceType.CARD_INSTALLMENT,
+      now,
+    );
+    if (!currentPrice) {
+      throw new SupurgelikRawMaterialPriceMissingException(material.code);
+    }
+
+    const commonExtraCosts =
+      prefetchedExtraCosts ?? (await this.resolveSupurgelikExtraCosts(now));
+    const basePricing =
+      prefetchedPricing ?? (await this.resolveSupurgelikDuzPricing(group.id));
+    const decorativeRates = isSupurgelikDecorativeProduct(input.productCode)
+      ? prefetchedDecorativeRates ??
+        (await this.resolveSupurgelikDecorativeRates(group.id, now))
+      : undefined;
+    const decorativeRate = decorativeRates?.get(input.thicknessMm) ?? null;
+    const pricing = isSupurgelikDecorativeProduct(input.productCode)
+      ? { ...basePricing, ...(decorativeRate ?? this.missingDecorativeRate()) }
+      : basePricing;
+    const ppWrappingCost = isSupurgelikPpProduct(input.productCode)
+      ? prefetchedPpWrappingCost !== undefined
+        ? prefetchedPpWrappingCost
+        : await this.resolveSupurgelikPpWrappingCost(now)
+      : undefined;
+
+    const calculatorInput: SupurgelikMdfInput = {
+      productCode: input.productCode,
+      thicknessMm: input.thicknessMm,
+      widthMm: input.widthMm,
+      lengthMm: input.lengthMm,
+      rawMaterial: {
+        code: material.code,
+        thicknessMm: material.thicknessMm.toString(),
+        sheetWidthMm: material.sheetWidthMm,
+        sheetLengthMm: material.sheetLengthMm,
+      },
+      sheetPrice: {
+        priceType: 'CARD_INSTALLMENT',
+        amount: currentPrice.price.toString(),
+      },
+      productionYield: {
+        netQty: master.netQty,
+        scope: 'GENERIC',
+      },
+      extraCosts: commonExtraCosts.items,
+      ppWrappingCost,
+      pricing,
+    };
+
+    return {
+      productGroupCode: 'SUPURGELIK',
+      productGroupName: group.name,
+      productName: product.name,
+      asOf: now.toISOString(),
+      ...this.engine.calculateSupurgelikMdf(calculatorInput),
+    };
+  }
+
+  /**
+   * DB'deki aktif generic Süpürgelik masterlarını keşfeder ve tek-satır
+   * calculator/service yolunu her satır için reuse eder.
+   */
+  async getSupurgelikMdfCosts(
+    input: { productCode: SupurgelikProductCode },
+    now: Date = new Date(),
+  ) {
+    if (!SUPURGELIK_PRODUCT_CODES.includes(input.productCode)) {
+      throw new BadRequestException('Geçersiz Süpürgelik productCode.');
+    }
+
+    const group = await this.prisma.productGroup.findUnique({
+      where: { code: 'SUPURGELIK' },
+    });
+    const product = group
+      ? await this.prisma.product.findUnique({
+          where: {
+            productGroupId_code: {
+              productGroupId: group.id,
+              code: input.productCode,
+            },
+          },
+        })
+      : null;
+    if (!group?.isActive || !product?.isActive) {
+      throw new NotFoundException(`Aktif Süpürgelik ürünü bulunamadı: ${input.productCode}`);
+    }
+
+    // Ortak group-scope giderleri her toplu request'te bir kez güncel DB'den çözülür.
+    const commonExtraCosts = await this.resolveSupurgelikExtraCosts(now);
+    const pricing = await this.resolveSupurgelikDuzPricing(group.id);
+    const decorativeRates = isSupurgelikDecorativeProduct(input.productCode)
+      ? await this.resolveSupurgelikDecorativeRates(group.id, now)
+      : undefined;
+    const ppWrappingCost = isSupurgelikPpProduct(input.productCode)
+      ? await this.resolveSupurgelikPpWrappingCost(now)
+      : undefined;
+
+    const productSizes = await this.prisma.productSize.findMany({
+      select: { widthMm: true, lengthMm: true },
+    });
+    const productSizeKeys = new Set(
+      productSizes.map((size) => `${size.widthMm}|${size.lengthMm}`),
+    );
+
+    const genericCandidates = await this.prisma.productionYield.findMany({
+      where: {
+        productId: null,
+        isActive: true,
+        rawMaterial: { isActive: true },
+      },
+      include: { rawMaterial: true },
+    });
+
+    // Generic ProductionYield üzerinde ürün grubu FK'si yoktur. Süpürgelik ayrımı,
+    // DB ProductSize eşleşmesi ve parçanın MDF tabaka boyuna tam oturmasıyla yapılır.
+    const masters = genericCandidates.filter(
+      (row) =>
+        row.productId === null &&
+        row.isActive &&
+        row.rawMaterial.isActive &&
+        row.pieceLengthMm === row.rawMaterial.sheetLengthMm &&
+        productSizeKeys.has(`${row.pieceWidthMm}|${row.pieceLengthMm}`),
+    );
+
+    const seen = new Set<string>();
+    for (const master of masters) {
+      const key = `${master.rawMaterial.thicknessMm.toString()}|${master.pieceWidthMm}|${master.pieceLengthMm}`;
+      if (seen.has(key)) {
+        throw new BadRequestException(
+          `Birden fazla aktif generic Süpürgelik ProductionYield bulundu: ${master.rawMaterial.thicknessMm.toString()} mm / ${master.pieceWidthMm}×${master.pieceLengthMm}`,
+        );
+      }
+      seen.add(key);
+    }
+
+    masters.sort((a, b) => {
+      const thicknessOrder = toDecimal(a.rawMaterial.thicknessMm).comparedTo(
+        toDecimal(b.rawMaterial.thicknessMm),
+      );
+      return (
+        thicknessOrder ||
+        a.pieceWidthMm - b.pieceWidthMm ||
+        a.pieceLengthMm - b.pieceLengthMm
+      );
+    });
+
+    const rows = [];
+    for (const master of masters) {
+      const thicknessMm = Number(master.rawMaterial.thicknessMm.toString());
+      try {
+        const calculated = await this.getSupurgelikMdfCost(
+          {
+            productCode: input.productCode,
+            thicknessMm,
+            widthMm: master.pieceWidthMm,
+            lengthMm: master.pieceLengthMm,
+          },
+          now,
+          commonExtraCosts,
+          pricing,
+          decorativeRates,
+          ppWrappingCost,
+        );
+        const pricingStatusCode =
+          calculated.pricing != null && 'statusCode' in calculated.pricing
+            ? calculated.pricing.statusCode
+            : null;
+        const pricingErrorMessage =
+          pricingStatusCode === SUPURGELIK_DECORATIVE_RATE_MISSING
+            ? supurgelikDecorativeRateMissingMessage(thicknessMm)
+            : pricingStatusCode === SUPURGELIK_PP_WRAPPING_COST_MISSING
+              ? supurgelikPpWrappingCostMissingMessage()
+              : null;
+        rows.push({
+          productCode: calculated.productCode,
+          thicknessMm: calculated.thicknessMm,
+          widthMm: calculated.widthMm,
+          lengthMm: calculated.lengthMm,
+          rawMaterial: calculated.rawMaterial,
+          sheetPrice: calculated.sheetPrice,
+          productionYield: calculated.productionYield,
+          priceAvailable: true as const,
+          mdfUnitCost: calculated.mdfUnitCost,
+          extraCosts: calculated.extraCosts,
+          extraCostsTotal: calculated.extraCostsTotal,
+          productionCost: calculated.productionCost,
+          pricing: calculated.pricing,
+          errorCode: pricingStatusCode,
+          errorMessage: pricingErrorMessage,
+        });
+      } catch (error) {
+        if (!(error instanceof SupurgelikRawMaterialPriceMissingException)) {
+          throw error;
+        }
+        rows.push({
+          productCode: input.productCode,
+          thicknessMm,
+          widthMm: master.pieceWidthMm,
+          lengthMm: master.pieceLengthMm,
+          rawMaterial: {
+            code: master.rawMaterial.code,
+            thicknessMm: master.rawMaterial.thicknessMm.toString(),
+            sheetWidthMm: master.rawMaterial.sheetWidthMm,
+            sheetLengthMm: master.rawMaterial.sheetLengthMm,
+          },
+          sheetPrice: null,
+          productionYield: {
+            netQty: master.netQty,
+            scope: 'GENERIC' as const,
+            productId: null,
+            productScoped: false as const,
+          },
+          priceAvailable: false as const,
+          mdfUnitCost: null,
+          extraCosts: commonExtraCosts.items,
+          extraCostsTotal: commonExtraCosts.totalAmount,
+          productionCost: null,
+          pricing: this.missingRawMaterialPricing(
+            input.productCode,
+            pricing,
+            decorativeRates?.get(thicknessMm) ??
+              (isSupurgelikDecorativeProduct(input.productCode)
+                ? this.missingDecorativeRate()
+                : undefined),
+            ppWrappingCost,
+          ),
+          errorCode: error.errorCode,
+          errorMessage: error.message,
+        });
+      }
+    }
+
+    return {
+      productGroupCode: 'SUPURGELIK',
+      productGroupName: group.name,
+      productCode: input.productCode,
+      productName: product.name,
+      asOf: now.toISOString(),
+      masterCount: masters.length,
+      rowCount: rows.length,
+      rows,
     };
   }
 
@@ -360,54 +725,24 @@ export class CostCalculationService {
 
   /**
    * Ayarlı Pervaz doğrulanmış Excel master ölçüleri.
-   * Yalnız seed registry ile eşleşen aktif ProductionYield kayıtları listelenir;
-   * fallback ile hesaplanabilecek yeni ölçüler bu tabloya otomatik girmez.
+   * Liste ilgili ürüne ait aktif ProductionYield kayıtlarını DB'den keşfeder;
+   * teorik fallback ölçüleri master yapılmadan tabloya girmez.
    */
   async getAyarliPervazMdfCosts(now: Date = new Date()) {
-    const verifiedRows = buildAyarliPervazYieldSeedRows();
-    const activeYields = await this.prisma.productionYield.findMany({
-      where: {
-        productId: null,
-        isActive: true,
-        OR: verifiedRows.map((row) => ({
-          rawMaterial: {
-            code: row.materialCode,
-            isActive: true,
-          },
-          pieceWidthMm: row.pieceWidthMm,
-          pieceLengthMm: row.pieceLengthMm,
-        })),
-      },
-      include: {
-        rawMaterial: true,
-      },
-    });
-
-    const activeKeys = new Set(
-      activeYields.map(
-        (row) =>
-          `${row.rawMaterial.code}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
-      ),
-    );
-    const contexts = verifiedRows.filter((row) =>
-      activeKeys.has(`${row.materialCode}:${row.pieceWidthMm}:${row.pieceLengthMm}`),
+    const { rows: contexts } = await discoverActiveProductMasterRows(
+      this.prisma,
+      { productGroupCode: 'PERVAZ', productCode: 'AYARLI_PERVAZ' },
     );
 
     const rows = [];
     for (const row of contexts) {
-      const thicknessMatch = /^MDF-(\d+)-/.exec(row.materialCode);
-      if (!thicknessMatch) {
-        throw new BadRequestException(
-          `Ayarlı Pervaz master ham madde kodundan kalınlık okunamadı: ${row.materialCode}`,
-        );
-      }
       rows.push(
         await this.getAyarliPervazMdfCost(
           {
             productCode: 'AYARLI_PERVAZ',
-            thicknessMm: Number(thicknessMatch[1]),
-            widthMm: row.pieceWidthMm,
-            lengthMm: row.pieceLengthMm,
+            thicknessMm: this.requirePervazThickness(row),
+            widthMm: row.widthMm,
+            lengthMm: row.lengthMm,
             rawMaterialCode: row.materialCode,
           },
           now,
@@ -425,32 +760,13 @@ export class CostCalculationService {
   }
 
   /**
-   * Dekoratif Pervaz — yalnız doğrulanmış ve aktif altı Excel master satırı.
+   * Dekoratif Pervaz — product-scoped aktif Excel master satırları DB'den keşfedilir.
    * Hesaplar her istekte güncel MDF, PERVAZ masraf ve product kâr ayarını kullanır.
    */
   async getDekoratifPervazCosts(now: Date = new Date()) {
-    const activeYields = await this.prisma.productionYield.findMany({
-      where: {
-        productId: null,
-        isActive: true,
-        OR: DEKORATIF_PERVAZ_YIELD_SEEDS.map((row) => ({
-          rawMaterial: { code: row.materialCode, isActive: true },
-          pieceWidthMm: row.pieceWidthMm,
-          pieceLengthMm: row.pieceLengthMm,
-        })),
-      },
-      include: { rawMaterial: true },
-    });
-    const activeKeys = new Set(
-      activeYields.map(
-        (row) =>
-          `${row.rawMaterial.code}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
-      ),
-    );
-    const contexts = DEKORATIF_PERVAZ_YIELD_SEEDS.filter((row) =>
-      activeKeys.has(
-        `${row.materialCode}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
-      ),
+    const { rows: contexts } = await discoverActiveProductMasterRows(
+      this.prisma,
+      { productGroupCode: 'PERVAZ', productCode: 'DEKORATIF_PERVAZ' },
     );
 
     const rows = [];
@@ -458,7 +774,7 @@ export class CostCalculationService {
       rows.push(
         await this.calculateDekoratifPervazRow(
           'DEKORATIF_PERVAZ',
-          context,
+          this.toDekoratifPervazContext(context),
           now,
         ),
       );
@@ -475,38 +791,19 @@ export class CostCalculationService {
 
   /** Dekoratif Pervaz Geniş Kılçık — yalnız Excel AC96–AC97 master satırları. */
   async getDekoratifGenisKilcikCosts(now: Date = new Date()) {
-    const product = await this.requirePervazProduct(
-      'DEKORATIF_PERVAZ_GENIS_KILCIK',
-    );
-    const activeYields = await this.prisma.productionYield.findMany({
-      where: {
-        productId: product.id,
-        isActive: true,
-        OR: DEKORATIF_GENIS_KILCIK_YIELD_SEEDS.map((row) => ({
-          rawMaterial: { code: row.materialCode, isActive: true },
-          pieceWidthMm: row.pieceWidthMm,
-          pieceLengthMm: row.pieceLengthMm,
-        })),
+    const { product, rows: contexts } = await discoverActiveProductMasterRows(
+      this.prisma,
+      {
+        productGroupCode: 'PERVAZ',
+        productCode: 'DEKORATIF_PERVAZ_GENIS_KILCIK',
       },
-      include: { rawMaterial: true },
-    });
-    const activeKeys = new Set(
-      activeYields.map(
-        (row) =>
-          `${row.rawMaterial.code}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
-      ),
-    );
-    const contexts = DEKORATIF_GENIS_KILCIK_YIELD_SEEDS.filter((row) =>
-      activeKeys.has(
-        `${row.materialCode}:${row.pieceWidthMm}:${row.pieceLengthMm}`,
-      ),
     );
     const rows = [];
     for (const context of contexts) {
       rows.push(
         await this.calculateDekoratifPervazRow(
           'DEKORATIF_PERVAZ_GENIS_KILCIK',
-          context,
+          this.toDekoratifPervazContext(context),
           now,
         ),
       );
@@ -667,25 +964,23 @@ export class CostCalculationService {
     };
   }
 
-  private async requirePervazProduct(productCode: string) {
-    const group = await this.prisma.productGroup.findUnique({
-      where: { code: 'PERVAZ' },
-    });
-    if (!group?.isActive) {
-      throw new NotFoundException('Ürün grubu bulunamadı: PERVAZ');
+  private requirePervazThickness(row: ActiveProductMasterRow): number {
+    const thicknessMm = Number(row.thicknessMm);
+    if (!Number.isInteger(thicknessMm) || thicknessMm <= 0) {
+      throw new BadRequestException(
+        `${row.materialCode} için Pervaz kalınlığı pozitif tam mm olmalıdır.`,
+      );
     }
-    const product = await this.prisma.product.findUnique({
-      where: {
-        productGroupId_code: {
-          productGroupId: group.id,
-          code: productCode,
-        },
-      },
-    });
-    if (!product?.isActive) {
-      throw new NotFoundException(`Aktif ürün bulunamadı: ${productCode}`);
-    }
-    return product;
+    return thicknessMm;
+  }
+
+  private toDekoratifPervazContext(row: ActiveProductMasterRow) {
+    return {
+      materialCode: row.materialCode,
+      thicknessMm: this.requirePervazThickness(row),
+      pieceWidthMm: row.widthMm,
+      pieceLengthMm: row.lengthMm,
+    };
   }
 
   private async requireAyarliPervazMainMaterialByCode(
@@ -910,6 +1205,150 @@ export class CostCalculationService {
       cutting: pick('CUTTING'),
       glue: pick('GLUE'),
       labor: pick('LABOR'),
+    };
+  }
+
+  private async resolveSupurgelikExtraCosts(
+    now: Date,
+  ): Promise<SupurgelikExtraCostContext> {
+    const list = await this.extraCostsService.listForProductGroup('SUPURGELIK', now);
+    const byCode = new Map(list.items.map((item) => [item.typeCode, item]));
+    const items = SUPURGELIK_EXTRA_COST_TYPE_ORDER.map((code) => {
+      const item = byCode.get(code);
+      if (item?.amount == null) {
+        throw new NotFoundException(
+          `Süpürgelik için şu an geçerli ortak ek maliyet bulunamadı: ${code}`,
+        );
+      }
+      return {
+        code: item.typeCode,
+        name: item.typeName,
+        amount: item.amount,
+      };
+    });
+
+    return { items, totalAmount: list.totalAmount };
+  }
+
+  private async resolveSupurgelikDuzPricing(
+    productGroupId: string,
+  ): Promise<SupurgelikDuzPricingContext> {
+    const settings = await this.prisma.pricingSetting.findMany({
+      where: {
+        productGroupId,
+        productId: null,
+        isActive: true,
+      },
+    });
+    if (settings.length > 1) {
+      throw new BadRequestException(
+        'SUPURGELIK için birden fazla aktif group-scope PricingSetting bulundu.',
+      );
+    }
+    const setting = settings[0];
+    if (setting?.profitRate == null) {
+      throw new NotFoundException(
+        'SUPURGELIK için aktif group-scope profitRate bulunamadı.',
+      );
+    }
+
+    const profitRate = toDecimal(setting.profitRate.toString());
+    if (profitRate.isNegative()) {
+      throw new BadRequestException('SUPURGELIK profitRate negatif olamaz.');
+    }
+    return {
+      profitRate: profitRate.toFixed(),
+      source: 'GROUP_PRICING_SETTING',
+    };
+  }
+
+  private async resolveSupurgelikDecorativeRates(
+    productGroupId: string,
+    now: Date,
+  ): Promise<SupurgelikDecorativeRateMap> {
+    const rows = await this.prisma.pricingThicknessModifier.findMany({
+      where: {
+        productGroupId,
+        modifierType: PricingModifierType.DECORATIVE,
+        isActive: true,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+      },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+
+    const byThickness: SupurgelikDecorativeRateMap = new Map();
+    for (const row of rows) {
+      if (byThickness.has(row.thicknessMm)) {
+        throw new BadRequestException(
+          `SUPURGELIK ${row.thicknessMm} mm için birden fazla geçerli dekoratif oran bulundu.`,
+        );
+      }
+      const rate = toDecimal(row.rate.toString());
+      if (rate.isNegative()) {
+        throw new BadRequestException(
+          `SUPURGELIK ${row.thicknessMm} mm dekoratif oranı negatif olamaz.`,
+        );
+      }
+      byThickness.set(row.thicknessMm, {
+        decorativeRate: rate.toFixed(),
+        decorativeRateSource: 'GROUP_THICKNESS_PRICING_MODIFIER',
+      });
+    }
+    return byThickness;
+  }
+
+  private missingDecorativeRate(): SupurgelikDecorativeRateContext {
+    return {
+      decorativeRate: null,
+      decorativeRateSource: null,
+    };
+  }
+
+  private async resolveSupurgelikPpWrappingCost(now: Date): Promise<string | null> {
+    const wrapping = await this.extraCostsService.getSupurgelikPpWrapping(now);
+    return wrapping.items[0]?.amount ?? null;
+  }
+
+  private missingRawMaterialPricing(
+    productCode: SupurgelikProductCode,
+    pricing: SupurgelikDuzPricingContext,
+    decorativeRate: SupurgelikDecorativeRateContext | undefined,
+    ppWrappingCost: string | null | undefined,
+  ) {
+    const ppFields = isSupurgelikPpProduct(productCode)
+      ? {
+          baseProductionCost: null,
+          ppWrappingCost: ppWrappingCost ?? null,
+          ppProductionCost: null,
+        }
+      : {};
+
+    if (isSupurgelikDecorativeProduct(productCode)) {
+      return {
+        ...pricing,
+        ...ppFields,
+        ...(decorativeRate ?? this.missingDecorativeRate()),
+        profitAmount: null,
+        priceBeforeRounding: null,
+        roundedBaseSalePrice: null,
+        basePublishedCashPrice: null,
+        decorativeAmount: null,
+        priceBeforeDecorativeRounding: null,
+        publishedCashPrice: null,
+        statusCode: decorativeRate?.decorativeRate == null
+          ? SUPURGELIK_DECORATIVE_RATE_MISSING
+          : null,
+      };
+    }
+
+    return {
+      ...pricing,
+      ...ppFields,
+      profitAmount: null,
+      priceBeforeRounding: null,
+      roundedBaseSalePrice: null,
+      publishedCashPrice: null,
     };
   }
 }

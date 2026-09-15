@@ -26,7 +26,7 @@ Hesaplama: decimal.js / Prisma Decimal
 
 Frontend doğrudan PostgreSQL'e erişemez.
 
-Akış: React UI → NestJS API → Validation / Business Rules → Calculation Engine → Prisma → PostgreSQL
+Akış: React UI → NestJS API → Validation → Service / Resolver → Calculation Engine. Prisma/PostgreSQL yalnız source/master data ve geçmiş için kullanılır.
 
 ## 3. Hesaplama Güvenliği
 
@@ -50,20 +50,23 @@ Temel parça maliyeti: `sheet_price / doğrulanmış NET adet`
 
 Bu mantık yalnızca kapı kasasına özgüdür.
 
-## 5. Diğer Ürünleri Kapı Kasasına Zorlama
+## 5. Ortak Altyapı ve Ürün Farkları
 
 - Her ürünün iki parçadan oluşacağını varsayma.
 - Her ürünün production yield / NET adet kullanacağını varsayma.
 - Kapı kasası kurallarını pervaz, süpürgelik, çıta, kapak vb. ürünlere otomatik uygulama.
-- Phase 1: `DoorFrameCalculator`. İleride her ürünün kendi calculator'ı olabilir; gereksiz generic mega-engine oluşturma.
+- `RawMaterial/Price`, `ProductionYield`, `ExtraCost`, `PricingSetting`, row exception, resolver ve Decimal yardımcılarını reuse et.
+- Ürüne özel kodu gerçek MDF, parça, NET/kesim geometrisi ve ek parametre farklarıyla sınırla; mega-engine veya gereksiz ürüne özel model oluşturma.
+- Süpürgelik henüz implemente edilmez. Sonraki fazda dekoratif ve PP sarma farklarını temel hesabın üzerine dinamik source parametre olarak uygula.
 
 ## 6. NET Adet
 
 NET adet kritik üretim master datasıdır.
 
-- NET adedi geometrik formülle yeniden hesaplama.
-- Excel'deki teorik formüllerden NET adet türetme.
-- Yalnızca doğrulanmış `production_yields` verisini kullan.
+- Eşleşen doğrulanmış Excel NET varsa MASTER her zaman teorik hesaptan önce gelir.
+- MASTER yoksa yalnız ürün grubu için doğrulanmış kesim geometrisinden `CALCULATED` öneri/fallback üretilebilir.
+- Fallback kaynağını açıkça belirt; otomatik DB kaydı oluşturma ve mevcut MASTER kaydı değiştirme.
+- MDF fiyatı veya başka ticari source değiştiğinde NET adet değişmez.
 - Yanlış ölçünün NET adedini başka üründe kullanma.
 - `raw material + parça ölçüsü + production yield` ilişkisini doğrula.
 - `netQty <= 0` kabul etme.
@@ -86,18 +89,22 @@ NET adet kritik üretim master datasıdır.
 
 ## 9. Değiştirilebilir Veriler
 
-Aşağıdaki değerler kod içerisinde sabit olmamalı; yönetim ekranından değiştirilmeli:
+Aşağıdaki ticari source değerleri calculator içinde hard-code edilmemeli; doğru scope'ta DB'de tutulup yönetim ekranından değiştirilmelidir:
 
-MDF fiyatı · NET adet · kesim · tutkal · işçilik · diğer giderler · KDV · kârlılık · kredi kartı farkı · fiyatlandırma parametreleri
+MDF CASH/CARD fiyatı · kesim · tutkal · işçilik · diğer giderler · KDV · kârlılık · dekoratif/PP sarma farkı · kart/taksit farkı · diğer fiyatlandırma parametreleri
 
-Akış: UI → Backend → Validation → Database
+- Scope'u gerçek ortaklığa göre global / product group / product / row düzeyinde seç; aynı değeri her ürün satırına kopyalama.
+- Akış: UI → API → validation → version/history → audit → DB.
+- Hesaplanan maliyet/satış fiyatı master data değildir; her request/refetch'te güncel source data ile runtime'da yeniden hesaplanır.
+- Source değişikliğinde calculated ürün satırlarını topluca update etme veya snapshot fiyatları kalıcılaştırma.
 
 ## 10. Excel Referansı
 
-- Mevcut Excel, Kapı Kasası V1 hesap mantığının ana referansıdır.
+- Excel, doğrulanmış NET master datası ve başlangıç source/regression benchmark'ıdır.
+- Her basılı satış fiyatını sabit sistem fiyatına dönüştürme; `PriceOverride` yalnız gerçekten mutlak yayın fiyatı gerektiğinde kullanılır.
 - Çelişkili formülleri kendin düzeltme; başlık ile formül farklıysa çelişkiyi raporla.
 - Kullanıcı doğrulamadan yeni hesap kuralı üretme.
-- V1 başarı kriteri: doğrulanmış Excel hesabını backend'de doğru şekilde yeniden üretmek.
+- Başarı kriteri: doğru NET + doğru aktif source data + doğru runtime hesap.
 
 ## 11. Satış Fiyatları
 

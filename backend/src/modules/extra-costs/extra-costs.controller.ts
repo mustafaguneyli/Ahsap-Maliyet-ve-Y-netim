@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
 import { ListExtraCostsQueryDto } from './dto/list-extra-costs-query.dto';
 import { UpdateExtraCostValueDto } from './dto/update-extra-cost-value.dto';
 import { ExtraCostsService } from './extra-costs.service';
@@ -10,6 +10,16 @@ export class ExtraCostsController {
   @Get()
   list(@Query() query: ListExtraCostsQueryDto) {
     return this.extraCostsService.listForProductGroup(query.productGroup);
+  }
+
+  @Get('PP_WRAPPING')
+  getPpWrapping(@Query() query: ListExtraCostsQueryDto) {
+    if (query.productGroup !== 'SUPURGELIK') {
+      throw new BadRequestException(
+        'PP Sarma maliyeti yalnız SUPURGELIK grubunda geçerlidir.',
+      );
+    }
+    return this.extraCostsService.getSupurgelikPpWrapping();
   }
 
   /**

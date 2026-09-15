@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { assertPricingSetting } from './pricing-setting.validation';
 import { UpdateProductPricingSettingDto } from './dto/update-product-pricing-setting.dto';
 import { UpdateAyarliPervazPricingSettingDto } from './dto/update-ayarli-pervaz-pricing-setting.dto';
+import { UpdateSupurgelikPricingSettingDto } from './dto/update-supurgelik-pricing-setting.dto';
 
 const PRICING_ENTITY_TYPE = 'PricingSetting';
 const DOOR_FRAME_PRODUCT_CODES = ['34_MM', '30_MM'] as const;
@@ -48,6 +49,17 @@ export type PervazPricingSettingResponse = Omit<
   productCode: (typeof PERVAZ_PRODUCT_CODES)[number];
 };
 
+export type SupurgelikPricingSettingResponse = {
+  productGroupCode: 'SUPURGELIK';
+  productGroupName: string;
+  settingId: string;
+  vatRate: string | null;
+  profitRate: string;
+  cardMarkupRate: string | null;
+  cardFixedSurchargeAmount: string | null;
+  isActive: boolean;
+};
+
 @Injectable()
 export class PricingSettingsService {
   constructor(
@@ -64,6 +76,121 @@ export class PricingSettingsService {
     const { product, setting } = await this.requireActiveProductSetting(normalized);
 
     return this.toResponse(product, setting);
+  }
+
+  async getSupurgelikGroupSetting(): Promise<SupurgelikPricingSettingResponse> {
+    const { group, setting } = await this.requireSupurgelikGroupSetting();
+    return this.toSupurgelikResponse(group, setting);
+  }
+
+  /**
+   * SUPURGELIK group-scope profitRate sürümlemesi. Diğer mevcut alanlar korunur;
+   * bu endpoint KDV veya kart kuralı icat etmez. Audit aynı transaction içindedir.
+   */
+  async replaceSupurgelikGroupSetting(
+    dto: UpdateSupurgelikPricingSettingDto,
+  ): Promise<SupurgelikPricingSettingResponse> {
+    if (dto.productGroup !== 'SUPURGELIK') {
+      throw new BadRequestException(
+        'productGroup Süpürgelik için SUPURGELIK olmalıdır.',
+      );
+    }
+    let profitRate;
+    try {
+      profitRate = toDecimal(dto.profitRate);
+    } catch {
+      throw new BadRequestException('Kâr oranı geçerli bir Decimal olmalıdır.');
+    }
+    if (!profitRate.isFinite() || profitRate.lte(0)) {
+      throw new BadRequestException('Kâr oranı 0’dan büyük olmalıdır.');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const group = await tx.productGroup.findUnique({
+        where: { code: 'SUPURGELIK' },
+      });
+      if (!group?.isActive) {
+        throw new NotFoundException('Ürün grubu bulunamadı: SUPURGELIK');
+      }
+
+      const active = await tx.pricingSetting.findMany({
+        where: {
+          productGroupId: group.id,
+          productId: null,
+          isActive: true,
+        },
+      });
+      if (active.length > 1) {
+        throw new BadRequestException(
+          'SUPURGELIK için birden fazla aktif group-scope PricingSetting bulundu.',
+        );
+      }
+      const current = active[0] ?? null;
+      if (
+        current?.profitRate != null &&
+        toDecimal(current.profitRate.toString()).equals(profitRate)
+      ) {
+        return { group, setting: current };
+      }
+
+      assertPricingSetting({
+        productGroupId: group.id,
+        productId: null,
+        vatRate: current?.vatRate?.toString() ?? null,
+        profitRate: profitRate.toString(),
+        cardMarkupRate: current?.cardMarkupRate?.toString() ?? null,
+        cardFixedSurchargeAmount:
+          current?.cardFixedSurchargeAmount?.toString() ?? null,
+        productGroupIsActive: group.isActive,
+      });
+
+      if (current) {
+        await tx.pricingSetting.update({
+          where: { id: current.id },
+          data: { isActive: false },
+        });
+        await this.auditService.record(
+          {
+            entityType: PRICING_ENTITY_TYPE,
+            entityId: current.id,
+            action: 'UPDATE',
+            fieldName: 'isActive',
+            oldValue: 'true',
+            newValue: 'false',
+            reason: 'Yeni PricingSetting için eski aktif kayıt kapatıldı (SUPURGELIK)',
+          },
+          tx,
+        );
+      }
+
+      const created = await tx.pricingSetting.create({
+        data: {
+          productGroupId: group.id,
+          productId: null,
+          vatRate: current?.vatRate ?? null,
+          profitRate: decimalToPrisma(profitRate),
+          cardMarkupRate: current?.cardMarkupRate ?? null,
+          cardFixedSurchargeAmount: current?.cardFixedSurchargeAmount ?? null,
+          isActive: true,
+        },
+      });
+      await this.auditService.record(
+        {
+          entityType: PRICING_ENTITY_TYPE,
+          entityId: created.id,
+          action: 'CREATE',
+          fieldName: 'profitRate',
+          oldValue: current?.profitRate?.toString() ?? null,
+          newValue: profitRate.toFixed(4),
+          reason: 'Süpürgelik normal baz kâr oranı güncellemesi',
+        },
+        tx,
+      );
+
+      return { group, setting: created };
+    });
+
+    return this.toSupurgelikResponse(result.group, result.setting);
   }
 
   /**
@@ -444,6 +571,61 @@ export class PricingSettingsService {
         `productCode Pervaz için geçersiz: ${code}. Beklenen: ${PERVAZ_PRODUCT_CODES.join(', ')}`,
       );
     }
+  }
+
+  private async requireSupurgelikGroupSetting() {
+    const group = await this.prisma.productGroup.findUnique({
+      where: { code: 'SUPURGELIK' },
+    });
+    if (!group?.isActive) {
+      throw new NotFoundException('Ürün grubu bulunamadı: SUPURGELIK');
+    }
+    const settings = await this.prisma.pricingSetting.findMany({
+      where: {
+        productGroupId: group.id,
+        productId: null,
+        isActive: true,
+      },
+    });
+    if (settings.length > 1) {
+      throw new BadRequestException(
+        'SUPURGELIK için birden fazla aktif group-scope PricingSetting bulundu.',
+      );
+    }
+    const setting = settings[0];
+    if (setting?.profitRate == null) {
+      throw new NotFoundException(
+        'SUPURGELIK için aktif group-scope profitRate bulunamadı.',
+      );
+    }
+    return { group, setting };
+  }
+
+  private toSupurgelikResponse(
+    group: { name: string },
+    setting: {
+      id: string;
+      vatRate: { toString(): string } | null;
+      profitRate: { toString(): string } | null;
+      cardMarkupRate: { toString(): string } | null;
+      cardFixedSurchargeAmount: { toString(): string } | null;
+      isActive: boolean;
+    },
+  ): SupurgelikPricingSettingResponse {
+    if (setting.profitRate == null) {
+      throw new NotFoundException('SUPURGELIK için profitRate eksik.');
+    }
+    return {
+      productGroupCode: 'SUPURGELIK',
+      productGroupName: group.name,
+      settingId: setting.id,
+      vatRate: setting.vatRate?.toString() ?? null,
+      profitRate: setting.profitRate.toString(),
+      cardMarkupRate: setting.cardMarkupRate?.toString() ?? null,
+      cardFixedSurchargeAmount:
+        setting.cardFixedSurchargeAmount?.toString() ?? null,
+      isActive: setting.isActive,
+    };
   }
 
   private async requirePervazProductSetting(productCode: string) {

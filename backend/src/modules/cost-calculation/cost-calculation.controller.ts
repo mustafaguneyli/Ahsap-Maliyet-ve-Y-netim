@@ -2,6 +2,8 @@ import { BadRequestException, Controller, Get, Query } from '@nestjs/common';
 import { DoorFrameVariantCode } from '../../calculation-engine/calculators/door-frame-variants';
 import { CostCalculationService } from './cost-calculation.service';
 import { AyarliPervazMdfQueryDto } from './dto/ayarli-pervaz-mdf-query.dto';
+import { SupurgelikListQueryDto } from './dto/supurgelik-list-query.dto';
+import { SupurgelikMdfQueryDto } from './dto/supurgelik-mdf-query.dto';
 
 @Controller('cost-calculation')
 export class CostCalculationController {
@@ -17,6 +19,21 @@ export class CostCalculationController {
       throw new BadRequestException('variant query parametresi 34_MM veya 30_MM olmalıdır.');
     }
     return this.costCalculationService.getDoorFrameMdfCosts(variant as DoorFrameVariantCode);
+  }
+
+  /**
+   * Süpürgelik — tek ölçü için yalnız temel MDF maliyeti.
+   * GET /cost-calculation/supurgelik/mdf?productCode=&thicknessMm=&widthMm=&lengthMm=
+   */
+  @Get('supurgelik/mdf')
+  getSupurgelikMdf(@Query() query: SupurgelikMdfQueryDto) {
+    return this.costCalculationService.getSupurgelikMdfCost(query);
+  }
+
+  /** GET /cost-calculation/supurgelik?productCode=DUZ_SUPURGELIK */
+  @Get('supurgelik')
+  getSupurgelikMdfCosts(@Query() query: SupurgelikListQueryDto) {
+    return this.costCalculationService.getSupurgelikMdfCosts(query);
   }
 
   /**

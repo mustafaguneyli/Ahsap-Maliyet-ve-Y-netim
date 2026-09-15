@@ -60,6 +60,7 @@ export type DekoratifPervazYieldSeedReport = {
     existingNetQty: number;
   }>;
   missingMaterials: string[];
+  missingProduct: boolean;
   totalExpected: number;
 };
 
@@ -71,8 +72,26 @@ export async function seedDekoratifPervazProductionYields(
     unchanged: 0,
     conflicts: [],
     missingMaterials: [],
+    missingProduct: false,
     totalExpected: DEKORATIF_PERVAZ_YIELD_SEEDS.length,
   };
+  const group = await prisma.productGroup.findUnique({
+    where: { code: 'PERVAZ' },
+  });
+  const product = group
+    ? await prisma.product.findUnique({
+        where: {
+          productGroupId_code: {
+            productGroupId: group.id,
+            code: 'DEKORATIF_PERVAZ',
+          },
+        },
+      })
+    : null;
+  if (!group?.isActive || !product?.isActive) {
+    report.missingProduct = true;
+    return report;
+  }
   const materialIds = new Map<string, string>();
 
   for (const row of DEKORATIF_PERVAZ_YIELD_SEEDS) {
@@ -91,7 +110,7 @@ export async function seedDekoratifPervazProductionYields(
 
     const active = await prisma.productionYield.findFirst({
       where: {
-        productId: null,
+        productId: product.id,
         rawMaterialId: materialId,
         pieceWidthMm: row.pieceWidthMm,
         pieceLengthMm: row.pieceLengthMm,
@@ -115,7 +134,7 @@ export async function seedDekoratifPervazProductionYields(
 
     await prisma.productionYield.create({
       data: {
-        productId: null,
+        productId: product.id,
         rawMaterialId: materialId,
         pieceWidthMm: row.pieceWidthMm,
         pieceLengthMm: row.pieceLengthMm,

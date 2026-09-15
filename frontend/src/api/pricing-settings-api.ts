@@ -82,6 +82,31 @@ export function getPervazPricingSetting(
   );
 }
 
+export type SupurgelikPricingSetting = {
+  productGroupCode: 'SUPURGELIK';
+  productGroupName: string;
+  settingId: string;
+  vatRate: string | null;
+  profitRate: string;
+  cardMarkupRate: string | null;
+  cardFixedSurchargeAmount: string | null;
+  isActive: boolean;
+};
+
+export function getSupurgelikPricingSetting() {
+  return apiRequest<SupurgelikPricingSetting>('/pricing-settings/supurgelik');
+}
+
+export function updateSupurgelikPricingSetting(profitRate: string) {
+  return apiRequest<SupurgelikPricingSetting>('/pricing-settings/supurgelik', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      productGroup: 'SUPURGELIK',
+      profitRate,
+    }),
+  });
+}
+
 export function updatePervazPricingSetting(
   productCode:
     | 'AYARLI_PERVAZ'

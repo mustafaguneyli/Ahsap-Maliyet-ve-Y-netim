@@ -32,6 +32,9 @@ export function PervazCostTable({ rows, mode }: Props) {
         decorative ? 'cc-pervaz-table-decorative' : ''
       }`}
     >
+      <caption className="cc-visually-hidden">
+        Pervaz ölçü, maliyet ve satış fiyatları
+      </caption>
       <thead>
         <tr>
           <th rowSpan={2} className="cc-col-size">
@@ -71,12 +74,12 @@ export function PervazCostTable({ rows, mode }: Props) {
               <th className="cc-th-sub">Düzeltme</th>
             </>
           )}
-          <th className="cc-th-sub">Nakit Satış</th>
-          <th className="cc-th-sub">Kart/Taksit</th>
+          <th className="cc-th-sub cc-pervaz-cash-col">Nakit Satış</th>
+          <th className="cc-th-sub cc-pervaz-card-col">Kart/Taksit</th>
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => {
+        {rows.map((row, index) => {
           const ayarli =
             mode === 'ayarli'
               ? (row as AyarliPervazMdfRow)
@@ -86,7 +89,14 @@ export function PervazCostTable({ rows, mode }: Props) {
             : null;
 
           return (
-            <tr key={`${row.thicknessMm}-${row.widthMm}-${row.lengthMm}`}>
+            <tr
+              key={`${row.thicknessMm}-${row.widthMm}-${row.lengthMm}`}
+              className={
+                index > 0 && rows[index - 1].thicknessMm !== row.thicknessMm
+                  ? 'cc-pervaz-row-group-start'
+                  : undefined
+              }
+            >
               <td className="cc-col-size">
                 {formatPieceSizeCm(row.widthMm, row.lengthMm)}
               </td>
@@ -206,7 +216,7 @@ export function PervazCostTable({ rows, mode }: Props) {
                 </>
               )}
               <td
-                className="cc-money"
+                className="cc-money cc-pervaz-cash-col"
                 title={
                   dekoratif
                     ? `Yuvarlama öncesi: ${formatTry(
@@ -219,13 +229,13 @@ export function PervazCostTable({ rows, mode }: Props) {
                   {formatWholeTry(row.pricing.publishedSalePrice)}
                 </span>
               </td>
-              <td className="cc-money">
+              <td className="cc-money cc-pervaz-card-col">
                 {row.pricing.cardSaleAvailable && row.pricing.cardSalePrice != null ? (
                   <span className="cc-badge cc-badge-card">
                     {formatWholeTry(row.pricing.cardSalePrice)}
                   </span>
                 ) : (
-                  '—'
+                  <span className="cc-card-unavailable">Yok</span>
                 )}
               </td>
             </tr>

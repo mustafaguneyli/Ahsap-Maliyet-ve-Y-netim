@@ -2,9 +2,12 @@ import { MaterialPriceType, PrismaClient } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
 import { seedDoorFrameExtraCosts } from '../src/modules/extra-costs/door-frame-extra-cost-seed';
 import { seedPervazExtraCosts } from '../src/modules/extra-costs/pervaz-extra-cost-seed';
+import { seedSupurgelikExtraCosts, seedSupurgelikPpWrappingType } from '../src/modules/extra-costs/supurgelik-extra-cost-seed';
 import { seedDoorFramePriceOverrides } from '../src/modules/price-overrides/door-frame-price-override-seed';
 import { seedDoorFramePricingSettings } from '../src/modules/pricing/door-frame-pricing-seed';
 import { seedAyarliPervazPricingSettings } from '../src/modules/pricing/ayarli-pervaz-pricing-seed';
+import { seedSupurgelikPricingSetting } from '../src/modules/pricing/supurgelik-pricing-seed';
+import { seedSupurgelikDecorativePricingRates } from '../src/modules/pricing/supurgelik-decorative-pricing-seed';
 import { seedAyarliPervazPricingRowExceptions } from '../src/modules/pricing/ayarli-pervaz-pricing-row-exception-seed';
 import { seedAyarliPervazCardSaleEnabled } from '../src/modules/pricing/ayarli-pervaz-card-sale-enabled-seed';
 import { seedDekoratifPervazPricing } from '../src/modules/pricing/dekoratif-pervaz-pricing-seed';
@@ -12,6 +15,7 @@ import { seedDekoratifGenisKilcikPricing } from '../src/modules/pricing/dekorati
 import { seedDoorFrameProducts } from '../src/modules/products/door-frame-product-seed';
 import { seedDoorFrameProductSizes } from '../src/modules/products/door-frame-product-size-seed';
 import { seedPervazProducts } from '../src/modules/products/pervaz-product-seed';
+import { seedSupurgelikProductMaster } from '../src/modules/products/supurgelik-product-seed';
 import { seedKilcikTypes } from '../src/modules/pervaz/kilcik-type-seed';
 import { seedAyarliPervazKilcikYields } from '../src/modules/pervaz/ayarli-pervaz-kilcik-yield-seed';
 import { seedDekoratifPervazKilcikYields } from '../src/modules/pervaz/dekoratif-pervaz-kilcik-yield-seed';
@@ -20,6 +24,8 @@ import { seedDoorFrameProductionYields } from '../src/modules/production-yields/
 import { seedAyarliPervazProductionYields } from '../src/modules/production-yields/pervaz-ayarli-yield-seed-data';
 import { seedDekoratifPervazProductionYields } from '../src/modules/production-yields/pervaz-dekoratif-yield-seed-data';
 import { seedDekoratifGenisKilcikProductionYields } from '../src/modules/production-yields/pervaz-dekoratif-genis-kilcik-yield-seed-data';
+import { seedSupurgelikProductionYields } from '../src/modules/production-yields/supurgelik-yield-seed-data';
+import { seedSupurgelik9MmRawMaterial } from '../src/modules/materials/supurgelik-raw-material-seed';
 
 /**
  * DEMPAŞ 2026-3 Revize Ham MDF fiyat tablosu.
@@ -365,6 +371,19 @@ async function main(): Promise<void> {
       `Seed tamamlandı. Yeni ham madde: ${createdMaterials}, yeni açık fiyat: ${createdPrices}. Toplam master: ${MATERIALS.length}.`,
     );
 
+    const supurgelikRawMaterialReport =
+      await seedSupurgelik9MmRawMaterial(prisma);
+    console.log(
+      `Süpürgelik 9 mm ham MDF seed: yeni=${supurgelikRawMaterialReport.created}, reuse=${supurgelikRawMaterialReport.reused}, conflict=${supurgelikRawMaterialReport.conflicts.length}, fiyatYeni=0`,
+    );
+    if (supurgelikRawMaterialReport.conflicts.length > 0) {
+      throw new Error(
+        `Süpürgelik 9 mm ham MDF conflict: ${supurgelikRawMaterialReport.conflicts
+          .map((conflict) => `${conflict.code}:${conflict.reason}`)
+          .join(', ')}`,
+      );
+    }
+
     const yieldReport = await seedDoorFrameProductionYields(prisma);
     console.log(
       `Kapı Kasası NET seed: beklenen=${yieldReport.totalExpected}, yeni=${yieldReport.created}, aynı=${yieldReport.unchanged}, conflict=${yieldReport.conflicts.length}, eksikHamMadde=${yieldReport.missingMaterials.length}`,
@@ -377,6 +396,35 @@ async function main(): Promise<void> {
       for (const c of yieldReport.conflicts) {
         console.warn(
           `  ${c.materialCode} ${c.pieceWidthMm}x${c.pieceLengthMm}: DB=${c.existingNetQty}, Excel=${c.excelNetQty}`,
+        );
+      }
+    }
+
+    const pervazProductReport = await seedPervazProducts(prisma);
+    console.log(
+      `Pervaz ürün seed: grupYeni=${pervazProductReport.productGroupCreated}, ürünYeni=${pervazProductReport.productsCreated}, mevcutAtlandı=${pervazProductReport.productsSkippedExisting}`,
+    );
+
+    const supurgelikProductReport = await seedSupurgelikProductMaster(prisma);
+    console.log(
+      `Süpürgelik master seed: grupYeni=${supurgelikProductReport.productGroupCreated}, ürünYeni=${supurgelikProductReport.productsCreated}, ürünMevcut=${supurgelikProductReport.productsSkippedExisting}, ölçüYeni=${supurgelikProductReport.sizesCreated}, ölçüMevcut=${supurgelikProductReport.sizesSkippedExisting}`,
+    );
+
+    const supurgelikYieldReport = await seedSupurgelikProductionYields(prisma);
+    console.log(
+      `Süpürgelik temel NET seed: beklenen=${supurgelikYieldReport.totalExpected}, yeni=${supurgelikYieldReport.created}, aynı=${supurgelikYieldReport.unchanged}, conflict=${supurgelikYieldReport.conflicts.length}, eksikHamMadde=${supurgelikYieldReport.missingMaterials.length}`,
+    );
+    if (supurgelikYieldReport.missingMaterials.length > 0) {
+      console.warn(
+        'Süpürgelik eksik/inactive ham maddeler:',
+        supurgelikYieldReport.missingMaterials.join(', '),
+      );
+    }
+    if (supurgelikYieldReport.conflicts.length > 0) {
+      console.warn('Süpürgelik temel NET conflict (overwrite yok):');
+      for (const conflict of supurgelikYieldReport.conflicts) {
+        console.warn(
+          `  ${conflict.materialCode} ${conflict.pieceWidthMm}×${conflict.pieceLengthMm}: DB=${conflict.existingNetQty}, seed=${conflict.seedNetQty}`,
         );
       }
     }
@@ -408,14 +456,27 @@ async function main(): Promise<void> {
       `Kapı Kasası ek maliyet seed: grupYeni=${extraCostReport.productGroupCreated}, tipYeni=${extraCostReport.typesCreated}, değerYeni=${extraCostReport.valuesCreated}, mevcutAtlandı=${extraCostReport.valuesSkippedExisting}`,
     );
 
+    const supurgelikExtraCostReport = await seedSupurgelikExtraCosts(prisma);
+    console.log(
+      `Süpürgelik ortak ek maliyet seed: beklenen=${supurgelikExtraCostReport.totalExpected}, yeni=${supurgelikExtraCostReport.created}, aynı=${supurgelikExtraCostReport.unchanged}, conflict=${supurgelikExtraCostReport.conflicts.length}, duplicateAktif=${supurgelikExtraCostReport.duplicateActiveTypes.join(',') || 'yok'}, eksikGrup=${supurgelikExtraCostReport.missingProductGroup}, eksikTip=${supurgelikExtraCostReport.missingTypes.join(',') || 'yok'}`,
+    );
+    if (supurgelikExtraCostReport.conflicts.length > 0) {
+      console.warn('Süpürgelik ortak ek maliyet conflict (overwrite yok):');
+      for (const conflict of supurgelikExtraCostReport.conflicts) {
+        console.warn(
+          `  ${conflict.typeCode}: DB=${conflict.existingAmount}, kaynak=${conflict.sourceAmount}`,
+        );
+      }
+    }
+
+    const supurgelikPpWrappingType = await seedSupurgelikPpWrappingType(prisma);
+    console.log(
+      `Süpürgelik PP Sarma tipi seed: ${supurgelikPpWrappingType.created ? 'yeni ExtraCostType' : 'mevcut ExtraCostType (değer yazılmadı)'}`,
+    );
+
     const productReport = await seedDoorFrameProducts(prisma);
     console.log(
       `Kapı Kasası ürün seed: grupYeni=${productReport.productGroupCreated}, ürünYeni=${productReport.productsCreated}, mevcutAtlandı=${productReport.productsSkippedExisting}`,
-    );
-
-    const pervazProductReport = await seedPervazProducts(prisma);
-    console.log(
-      `Pervaz ürün seed: grupYeni=${pervazProductReport.productGroupCreated}, ürünYeni=${pervazProductReport.productsCreated}, mevcutAtlandı=${pervazProductReport.productsSkippedExisting}`,
     );
 
     const genisMainYieldReport =
@@ -486,6 +547,33 @@ async function main(): Promise<void> {
     );
     if (pricingReport.missingProducts.length > 0) {
       console.warn('Eksik ürünler:', pricingReport.missingProducts.join(', '));
+    }
+
+    const supurgelikPricingReport = await seedSupurgelikPricingSetting(prisma);
+    console.log(
+      `Süpürgelik fiyatlandırma seed: yeni=${supurgelikPricingReport.created}, aynı=${supurgelikPricingReport.unchanged}, conflict=${supurgelikPricingReport.conflicts.length}, duplicateAktif=${supurgelikPricingReport.duplicateActive}, inactiveGeçmişKorundu=${supurgelikPricingReport.inactiveHistoryPreserved}, eksikGrup=${supurgelikPricingReport.missingProductGroup}`,
+    );
+    if (supurgelikPricingReport.conflicts.length > 0) {
+      console.warn('Süpürgelik fiyatlandırma conflict (overwrite yok):');
+      for (const conflict of supurgelikPricingReport.conflicts) {
+        console.warn(
+          `  ${conflict.field}: DB=${conflict.existingValue}, kaynak=${conflict.sourceValue}`,
+        );
+      }
+    }
+
+    const supurgelikDecorativePricingReport =
+      await seedSupurgelikDecorativePricingRates(prisma);
+    console.log(
+      `Süpürgelik dekoratif pricing seed: beklenen=${supurgelikDecorativePricingReport.totalExpected}, yeni=${supurgelikDecorativePricingReport.created}, aynı=${supurgelikDecorativePricingReport.unchanged}, conflict=${supurgelikDecorativePricingReport.conflicts.length}, duplicateAktif=${supurgelikDecorativePricingReport.duplicateActiveThicknesses.join(',') || 'yok'}, inactiveGeçmişKorundu=${supurgelikDecorativePricingReport.inactiveHistoryPreserved}, eksikGrup=${supurgelikDecorativePricingReport.missingProductGroup}, eksikDekoratifÜrün=${supurgelikDecorativePricingReport.missingDecorativeProduct}`,
+    );
+    if (supurgelikDecorativePricingReport.conflicts.length > 0) {
+      console.warn('Süpürgelik dekoratif pricing conflict (overwrite yok):');
+      for (const conflict of supurgelikDecorativePricingReport.conflicts) {
+        console.warn(
+          `  ${conflict.thicknessMm} mm: DB=${conflict.existingRate}, Excel=${conflict.seedRate}`,
+        );
+      }
     }
 
     const ayarliPricingReport = await seedAyarliPervazPricingSettings(prisma);

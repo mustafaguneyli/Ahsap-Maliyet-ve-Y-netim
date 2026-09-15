@@ -200,3 +200,110 @@ export function fetchDekoratifGenisKilcikCosts(): Promise<DekoratifGenisKilcikRe
     '/cost-calculation/pervaz/dekoratif-genis-kilcik',
   );
 }
+
+export const SUPURGELIK_PRODUCT_CODES = [
+  'DUZ_SUPURGELIK',
+  'DEKORATIF_SUPURGELIK',
+  'DUZ_PP_SARMA_SUPURGELIK',
+  'DEKORATIF_PP_SARMA_SUPURGELIK',
+] as const;
+
+export type SupurgelikProductCode = (typeof SUPURGELIK_PRODUCT_CODES)[number];
+
+export type SupurgelikRowErrorCode =
+  | 'RAW_MATERIAL_PRICE_MISSING'
+  | 'DECORATIVE_RATE_MISSING'
+  | 'PP_WRAPPING_COST_MISSING';
+
+export type SupurgelikPricing = {
+  profitRate?: string;
+  source?: 'GROUP_PRICING_SETTING';
+  profitAmount?: string | null;
+  priceBeforeRounding?: string | null;
+  roundedBaseSalePrice?: string | null;
+  baseProductionCost?: string | null;
+  ppWrappingCost?: string | null;
+  ppProductionCost?: string | null;
+  basePublishedCashPrice?: string | null;
+  decorativeRate?: string | null;
+  decorativeRateSource?: 'GROUP_THICKNESS_PRICING_MODIFIER' | null;
+  decorativeAmount?: string | null;
+  priceBeforeDecorativeRounding?: string | null;
+  publishedCashPrice: string | null;
+  statusCode?: SupurgelikRowErrorCode | null;
+};
+
+export type SupurgelikCostRow = {
+  productCode: SupurgelikProductCode;
+  thicknessMm: number;
+  widthMm: number;
+  lengthMm: number;
+  rawMaterial: {
+    code: string;
+    thicknessMm: string;
+    sheetWidthMm: number;
+    sheetLengthMm: number;
+  };
+  sheetPrice: {
+    priceType: 'CARD_INSTALLMENT';
+    amount: string;
+  } | null;
+  productionYield: {
+    netQty: number;
+    scope: 'GENERIC';
+    productId: null;
+    productScoped: false;
+  };
+  priceAvailable: boolean;
+  mdfUnitCost: string | null;
+  extraCosts: Array<{
+    code: string;
+    name: string;
+    amount: string;
+  }>;
+  extraCostsTotal: string;
+  productionCost: string | null;
+  pricing: SupurgelikPricing;
+  errorCode: SupurgelikRowErrorCode | null;
+  errorMessage: string | null;
+};
+
+export type SupurgelikCostsResponse = {
+  productGroupCode: 'SUPURGELIK';
+  productGroupName: string;
+  productCode: SupurgelikProductCode;
+  productName: string;
+  asOf: string;
+  masterCount: number;
+  rowCount: number;
+  rows: SupurgelikCostRow[];
+};
+
+export function fetchSupurgelikCosts(
+  productCode: SupurgelikProductCode,
+): Promise<SupurgelikCostsResponse> {
+  return apiRequest<SupurgelikCostsResponse>(
+    `/cost-calculation/supurgelik?productCode=${encodeURIComponent(productCode)}`,
+  );
+}
+
+/** Frontend hesap yapmaz; bu alanlar API response contract’ıdır. */
+type SupurgelikCostRowContract = {
+  productionYield: { netQty: number; productId: null };
+  sheetPrice: { priceType: 'CARD_INSTALLMENT'; amount: string } | null;
+  mdfUnitCost: string | null;
+  extraCostsTotal: string;
+  productionCost: string | null;
+  pricing: {
+    profitRate?: string;
+    publishedCashPrice: string | null;
+    decorativeRate?: string | null;
+    statusCode?: SupurgelikRowErrorCode | null;
+  };
+  errorCode: SupurgelikRowErrorCode | null;
+};
+
+const _supurgelikCostContractOk: SupurgelikCostRow extends SupurgelikCostRowContract
+  ? true
+  : never = true;
+void _supurgelikCostContractOk;

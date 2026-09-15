@@ -19,13 +19,13 @@ export type ExtraCostListResponse = {
 };
 
 export type UpdateExtraCostValueInput = {
-  productGroup: 'door_frame' | 'PERVAZ';
+  productGroup: 'door_frame' | 'PERVAZ' | 'SUPURGELIK';
   amount: string;
   effectiveFrom: string;
 };
 
 export function listExtraCosts(
-  productGroup: 'door_frame' | 'PERVAZ' = 'door_frame',
+  productGroup: 'door_frame' | 'PERVAZ' | 'SUPURGELIK' = 'door_frame',
 ) {
   return apiRequest<ExtraCostListResponse>(
     `/extra-costs?productGroup=${encodeURIComponent(productGroup)}`,
@@ -42,5 +42,11 @@ export function updateExtraCostValue(
       method: 'PATCH',
       body: JSON.stringify(input),
     },
+  );
+}
+
+export function getSupurgelikPpWrapping() {
+  return apiRequest<ExtraCostListResponse>(
+    `/extra-costs/PP_WRAPPING?productGroup=${encodeURIComponent('SUPURGELIK')}`,
   );
 }

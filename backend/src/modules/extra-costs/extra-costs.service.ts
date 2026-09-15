@@ -10,6 +10,7 @@ import { assertExtraCostValueScope } from './extra-cost-value.validation';
 import { selectCurrentExtraCostValue } from './current-extra-cost-value';
 import { UpdateExtraCostValueDto } from './dto/update-extra-cost-value.dto';
 import { PERVAZ_EXTRA_COST_TYPE_ORDER } from './pervaz-extra-cost-seed';
+import { SUPURGELIK_EXTRA_COST_TYPE_ORDER, SUPURGELIK_PP_WRAPPING_TYPE_CODE, SUPURGELIK_PP_WRAPPING_TYPE_NAME, SUPURGELIK_UPDATABLE_EXTRA_COST_TYPE_ORDER } from './supurgelik-extra-cost-seed';
 
 const VALUE_ENTITY_TYPE = 'ExtraCostValue';
 
@@ -24,7 +25,7 @@ export const DOOR_FRAME_EXTRA_COST_TYPE_ORDER = [
 export type DoorFrameExtraCostTypeCode =
   (typeof DOOR_FRAME_EXTRA_COST_TYPE_ORDER)[number];
 
-export type ExtraCostProductGroupCode = 'door_frame' | 'PERVAZ';
+export type ExtraCostProductGroupCode = 'door_frame' | 'PERVAZ' | 'SUPURGELIK';
 
 function extraCostTypeOrderForGroup(
   productGroupCode: string,
@@ -35,9 +36,19 @@ function extraCostTypeOrderForGroup(
   if (productGroupCode === 'PERVAZ') {
     return PERVAZ_EXTRA_COST_TYPE_ORDER;
   }
+  if (productGroupCode === 'SUPURGELIK') {
+    return SUPURGELIK_EXTRA_COST_TYPE_ORDER;
+  }
   throw new BadRequestException(
-    'productGroup şu an yalnızca door_frame veya PERVAZ olabilir.',
+    'productGroup şu an yalnızca door_frame, PERVAZ veya SUPURGELIK olabilir.',
   );
+}
+
+function updatableExtraCostCodes(productGroupCode: string): readonly string[] {
+  if (productGroupCode === 'SUPURGELIK') {
+    return SUPURGELIK_UPDATABLE_EXTRA_COST_TYPE_ORDER;
+  }
+  return extraCostTypeOrderForGroup(productGroupCode);
 }
 
 export type ExtraCostListItem = {
@@ -106,6 +117,20 @@ export class ExtraCostsService {
         throw new NotFoundException(`Ek maliyet tipi bulunamadı: ${code}`);
       }
 
+      if (productGroupCode === 'SUPURGELIK') {
+        const currentCandidates = type.values.filter(
+          (value) =>
+            value.isActive &&
+            value.effectiveFrom.getTime() <= now.getTime() &&
+            (value.effectiveTo == null || value.effectiveTo.getTime() > now.getTime()),
+        );
+        if (currentCandidates.length > 1) {
+          throw new BadRequestException(
+            `SUPURGELIK / ${code} için aynı anda geçerli birden fazla aktif ExtraCostValue bulundu.`,
+          );
+        }
+      }
+
       const current = selectCurrentExtraCostValue(type.values, now);
       if (current) {
         total = total.plus(toDecimal(current.amount.toString()));
@@ -132,6 +157,88 @@ export class ExtraCostsService {
   }
 
   /**
+   * SUPURGELIK group-scope PP_WRAPPING. Değer yoksa amount=null; 0 uydurulmaz.
+   */
+  async getSupurgelikPpWrapping(
+    now: Date = new Date(),
+  ): Promise<ExtraCostListResponse> {
+    const group = await this.prisma.productGroup.findUnique({
+      where: { code: 'SUPURGELIK' },
+    });
+    if (!group || !group.isActive) {
+      throw new NotFoundException('Ürün grubu bulunamadı: SUPURGELIK');
+    }
+
+    const type = await this.ensurePpWrappingType();
+    const values = await this.prisma.extraCostValue.findMany({
+      where: {
+        extraCostTypeId: type.id,
+        productGroupId: group.id,
+        productId: null,
+        isActive: true,
+      },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+
+    const currentCandidates = values.filter(
+      (value) =>
+        value.isActive &&
+        value.effectiveFrom.getTime() <= now.getTime() &&
+        (value.effectiveTo == null || value.effectiveTo.getTime() > now.getTime()),
+    );
+    if (currentCandidates.length > 1) {
+      throw new BadRequestException(
+        'SUPURGELIK / PP_WRAPPING için aynı anda geçerli birden fazla aktif ExtraCostValue bulundu.',
+      );
+    }
+
+    const current = selectCurrentExtraCostValue(values, now);
+    const item: ExtraCostListItem = {
+      typeId: type.id,
+      typeCode: type.code,
+      typeName: type.name,
+      valueId: current?.id ?? null,
+      amount: current ? current.amount.toString() : null,
+      effectiveFrom: current ? current.effectiveFrom.toISOString() : null,
+      effectiveTo: current?.effectiveTo ? current.effectiveTo.toISOString() : null,
+    };
+
+    return {
+      productGroupCode: group.code,
+      productGroupName: group.name,
+      asOf: now.toISOString(),
+      items: [item],
+      totalAmount: current ? current.amount.toString() : '',
+    };
+  }
+
+  private async ensurePpWrappingType(): Promise<{
+    id: string;
+    code: string;
+    name: string;
+    isActive: boolean;
+  }> {
+    const existing = await this.prisma.extraCostType.findUnique({
+      where: { code: SUPURGELIK_PP_WRAPPING_TYPE_CODE },
+    });
+    if (existing?.isActive) {
+      return existing;
+    }
+    if (existing && !existing.isActive) {
+      throw new NotFoundException(
+        `Ek maliyet tipi bulunamadı: ${SUPURGELIK_PP_WRAPPING_TYPE_CODE}`,
+      );
+    }
+    return this.prisma.extraCostType.create({
+      data: {
+        code: SUPURGELIK_PP_WRAPPING_TYPE_CODE,
+        name: SUPURGELIK_PP_WRAPPING_TYPE_NAME,
+        isActive: true,
+      },
+    });
+  }
+
+  /**
    * Mevcut açık dönemi kapatır, yeni ExtraCostValue oluşturur.
    * Eski kayıt overwrite edilmez; audit aynı transaction içinde yazılır.
    */
@@ -139,7 +246,7 @@ export class ExtraCostsService {
     typeCode: string,
     dto: UpdateExtraCostValueDto,
   ): Promise<ExtraCostListResponse> {
-    const typeOrder = extraCostTypeOrderForGroup(dto.productGroup);
+    const typeOrder = updatableExtraCostCodes(dto.productGroup);
     const normalizedCode = typeCode.trim().toUpperCase();
     if (!typeOrder.includes(normalizedCode)) {
       throw new BadRequestException(
@@ -147,9 +254,14 @@ export class ExtraCostsService {
       );
     }
 
-    const amount = toDecimal(dto.amount);
-    if (amount.isNegative()) {
-      throw new BadRequestException('Ek maliyet tutarı negatif olamaz.');
+    let amount: ReturnType<typeof toDecimal>;
+    try {
+      amount = toDecimal(dto.amount);
+    } catch {
+      throw new BadRequestException('Ek maliyet tutarı geçerli bir Decimal olmalıdır.');
+    }
+    if (!amount.isFinite() || amount.lte(0)) {
+      throw new BadRequestException('Ek maliyet tutarı 0’dan büyük olmalıdır.');
     }
 
     let effectiveFrom = this.parseEffectiveFromDate(dto.effectiveFrom);
@@ -162,9 +274,19 @@ export class ExtraCostsService {
         throw new NotFoundException(`Ürün grubu bulunamadı: ${dto.productGroup}`);
       }
 
-      const type = await tx.extraCostType.findUnique({
-        where: { code: normalizedCode },
-      });
+      const type =
+        (await tx.extraCostType.findUnique({
+          where: { code: normalizedCode },
+        })) ??
+        (normalizedCode === SUPURGELIK_PP_WRAPPING_TYPE_CODE
+          ? await tx.extraCostType.create({
+              data: {
+                code: SUPURGELIK_PP_WRAPPING_TYPE_CODE,
+                name: SUPURGELIK_PP_WRAPPING_TYPE_NAME,
+                isActive: true,
+              },
+            })
+          : null);
       if (!type || !type.isActive) {
         throw new NotFoundException(`Ek maliyet tipi bulunamadı: ${normalizedCode}`);
       }
@@ -189,6 +311,10 @@ export class ExtraCostsService {
       });
 
       if (open) {
+        if (toDecimal(open.amount.toString()).equals(amount)) {
+          return;
+        }
+
         // Aynı takvim gününde ikinci güncelleme: YYYY-MM-DD gece yarısı eski dönemle çakışmasın.
         if (effectiveFrom.getTime() <= open.effectiveFrom.getTime()) {
           const now = new Date();
@@ -247,6 +373,10 @@ export class ExtraCostsService {
         tx,
       );
     });
+
+    if (normalizedCode === SUPURGELIK_PP_WRAPPING_TYPE_CODE) {
+      return this.getSupurgelikPpWrapping();
+    }
 
     return this.listForProductGroup(dto.productGroup);
   }

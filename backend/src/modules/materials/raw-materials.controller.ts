@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ListRawMaterialsQueryDto } from './dto/list-raw-materials-query.dto';
+import { UpdateCardInstallmentPriceDto } from './dto/update-card-installment-price.dto';
 import { UpdateRawMaterialDto } from './dto/update-raw-material.dto';
 import { UpdateRawMaterialPricesDto } from './dto/update-raw-material-prices.dto';
 import { RawMaterialsService } from './raw-materials.service';
@@ -46,6 +47,15 @@ export class RawMaterialsController {
     @Body() dto: UpdateRawMaterialPricesDto,
   ) {
     return this.rawMaterialsService.updatePrices(id, dto);
+  }
+
+  /** Yalnız CARD_INSTALLMENT için tarihçeli fiyat dönemi oluşturur. */
+  @Post(':id/prices/card-installment')
+  updateCardInstallmentPrice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCardInstallmentPriceDto,
+  ) {
+    return this.rawMaterialsService.updateCardInstallmentPrice(id, dto);
   }
 
   /** Hard delete yok; isActive=false soft deactivate. */

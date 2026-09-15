@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch } from '@nestjs/common';
 import { UpdateProductPricingSettingDto } from './dto/update-product-pricing-setting.dto';
 import { UpdateAyarliPervazPricingSettingDto } from './dto/update-ayarli-pervaz-pricing-setting.dto';
+import { UpdateSupurgelikPricingSettingDto } from './dto/update-supurgelik-pricing-setting.dto';
 import { PricingSettingsService } from './pricing-settings.service';
 
 @Controller('pricing-settings')
@@ -44,5 +45,17 @@ export class PricingSettingsController {
       productCode,
       dto,
     );
+  }
+
+  /** GET /pricing-settings/supurgelik */
+  @Get('supurgelik')
+  getSupurgelikGroup() {
+    return this.pricingSettingsService.getSupurgelikGroupSetting();
+  }
+
+  /** Aktif sürümü kapatır, yalnız normal baz profitRate için yeni sürüm açar. */
+  @Patch('supurgelik')
+  replaceSupurgelikGroup(@Body() dto: UpdateSupurgelikPricingSettingDto) {
+    return this.pricingSettingsService.replaceSupurgelikGroupSetting(dto);
   }
 }

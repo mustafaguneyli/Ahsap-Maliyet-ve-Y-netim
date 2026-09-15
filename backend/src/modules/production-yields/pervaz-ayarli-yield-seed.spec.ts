@@ -85,6 +85,12 @@ describe('seedAyarliPervazProductionYields', () => {
 
   it('ilk çalışmada 20 aktif yield oluşturur', async () => {
     const prisma = {
+      productGroup: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'pervaz-group', isActive: true }),
+      },
+      product: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'ayarli-product', isActive: true }),
+      },
       rawMaterial: {
         findUnique: jest.fn().mockImplementation(({ where: { code } }: { where: { code: string } }) =>
           Promise.resolve({ id: materialIds[code], code }),
@@ -105,6 +111,7 @@ describe('seedAyarliPervazProductionYields', () => {
     expect(report.missingMaterials).toEqual([]);
     expect(prisma.productionYield.create).toHaveBeenCalledTimes(20);
     expect(prisma.productionYield.create.mock.calls[12][0].data).toMatchObject({
+      productId: 'ayarli-product',
       rawMaterialId: 'm12-210',
       pieceWidthMm: 100,
       pieceLengthMm: 2500,
@@ -116,6 +123,12 @@ describe('seedAyarliPervazProductionYields', () => {
   it('aynı NET varken duplicate oluşturmaz', async () => {
     const rows = buildAyarliPervazYieldSeedRows();
     const prisma = {
+      productGroup: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'pervaz-group', isActive: true }),
+      },
+      product: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'ayarli-product', isActive: true }),
+      },
       rawMaterial: {
         findUnique: jest.fn().mockImplementation(({ where: { code } }: { where: { code: string } }) =>
           Promise.resolve({ id: materialIds[code], code }),
@@ -154,6 +167,12 @@ describe('seedAyarliPervazProductionYields', () => {
 
   it('farklı aktif NET varsa overwrite etmez, conflict raporlar', async () => {
     const prisma = {
+      productGroup: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'pervaz-group', isActive: true }),
+      },
+      product: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'ayarli-product', isActive: true }),
+      },
       rawMaterial: {
         findUnique: jest.fn().mockImplementation(({ where: { code } }: { where: { code: string } }) =>
           Promise.resolve({ id: materialIds[code], code }),
