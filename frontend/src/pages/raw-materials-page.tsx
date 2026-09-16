@@ -295,8 +295,7 @@ export function RawMaterialsPage() {
               </label>
 
               <p className="rm-hint">
-                Eski fiyat kaydı silinmez; mevcut dönem kapatılır ve yeni tarihçeli fiyat
-                oluşturulur.
+                Eski fiyat silinmez; yeni fiyat bu tarihten itibaren geçerli olur.
               </p>
 
               <div className="rm-form-actions">

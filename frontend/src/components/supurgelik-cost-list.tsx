@@ -526,7 +526,7 @@ export function SupurgelikCostList() {
     if (editingDecorativeThicknessMm == null) return;
     if (!isPositiveDecimalInput(decorativeRateInput)) {
       setSourceDecorativeRatesError(
-        'Dekoratif oran 0’dan büyük geçerli bir Decimal olmalıdır (örn. 25).',
+        'Dekoratif oran 0’dan büyük geçerli bir değer olmalıdır (örn. 25).',
       );
       return;
     }
@@ -559,7 +559,7 @@ export function SupurgelikCostList() {
     event.preventDefault();
     if (!isPositiveDecimalInput(ppWrappingAmountInput)) {
       setSourcePpWrappingError(
-        'PP sarma maliyeti 0’dan büyük geçerli bir Decimal olmalıdır.',
+        'PP sarma maliyeti 0’dan büyük geçerli bir tutar olmalıdır.',
       );
       return;
     }
@@ -592,7 +592,7 @@ export function SupurgelikCostList() {
     event.preventDefault();
     if (!isPositiveDecimalInput(profitRateInput)) {
       setSourcePricingError(
-        'Kâr oranı 0’dan büyük geçerli bir Decimal olmalıdır (örn. 20).',
+        'Kâr oranı 0’dan büyük geçerli bir değer olmalıdır (örn. 20).',
       );
       return;
     }
@@ -629,7 +629,7 @@ export function SupurgelikCostList() {
 
     if (!isPositiveDecimalInput(extraCostAmountInput)) {
       setSourceExtraCostsError(
-        'Üretim gideri 0’dan büyük geçerli bir Decimal olmalıdır (örn. 5).',
+        'Üretim gideri 0’dan büyük geçerli bir tutar olmalıdır (örn. 5).',
       );
       return;
     }
@@ -672,7 +672,7 @@ export function SupurgelikCostList() {
 
     if (!isPositiveDecimalInput(priceInput)) {
       setSourceError(
-        'Kart / Taksit fiyatı 0’dan büyük geçerli bir Decimal olmalıdır (örn. 1900).',
+        'Kart / Taksit fiyatı 0’dan büyük geçerli bir tutar olmalıdır (örn. 1900).',
       );
       return;
     }
@@ -743,7 +743,7 @@ export function SupurgelikCostList() {
             onClick={openSourceDrawer}
             disabled={loading || !data}
           >
-            Kaynak Değerleri Düzenle
+            Maliyet Ayarlarını Düzenle
           </button>
           <div className="cc-supurgelik-count" aria-live="polite">
             <span>Listelenen satır</span>
@@ -759,11 +759,6 @@ export function SupurgelikCostList() {
           </button>
         </div>
       </div>
-
-      <p className="cc-note">
-        Ölçüler ekranda santimetre gösterilir. NET, maliyet, oran ve satış fiyatı
-        değerleri backend yanıtından doğrudan alınır; bu ekran fiyat hesaplamaz.
-      </p>
 
       {error ? (
         <div className="cc-alert cc-alert-actions">
@@ -815,11 +810,11 @@ export function SupurgelikCostList() {
             onClick={(event) => event.stopPropagation()}
             role="dialog"
             aria-modal="true"
-            aria-label="Süpürgelik kaynak değerlerini düzenle"
+            aria-label="Süpürgelik maliyet ayarlarını düzenle"
           >
             <div className="cc-drawer-header">
               <div>
-                <h2>Kaynak Değerleri Düzenle</h2>
+                <h2>Maliyet Ayarlarını Düzenle</h2>
                 <span className="cc-supurgelik-source-subtitle">
                   Süpürgelik
                 </span>
@@ -837,7 +832,7 @@ export function SupurgelikCostList() {
             <div className="cc-supurgelik-source-body">
               <div className="cc-supurgelik-source-section-heading">
                 <span>Ham MDF Fiyatları</span>
-                <small>Hesapta kullanılan kaynak: CARD_INSTALLMENT</small>
+                <small>Kart / taksit alış fiyatı</small>
               </div>
 
               {sourceNotice ? <div className="cc-notice">{sourceNotice}</div> : null}
@@ -944,13 +939,12 @@ export function SupurgelikCostList() {
               )}
 
               <p className="cc-note">
-                Değişiklik eski fiyatı silmez; açık dönem kapanır, yeni tarihçeli
-                CARD_INSTALLMENT kaydı ve audit aynı transaction içinde oluşturulur.
+                Eski fiyat silinmez; yeni fiyat bu tarihten itibaren geçerli olur.
               </p>
 
               <div className="cc-supurgelik-source-section-heading cc-supurgelik-source-section-divider">
                 <span>Ortak Üretim Giderleri</span>
-                <small>SUPURGELIK grup kapsamı · CUTTING ve LABOR</small>
+                <small>Kesim ve işçilik</small>
               </div>
 
               {sourceExtraCostsError ? (
@@ -963,7 +957,7 @@ export function SupurgelikCostList() {
                 </div>
               ) : sourceExtraCosts.length === 0 ? (
                 <div className="cc-empty">
-                  <p>Aktif CUTTING/LABOR grup gideri bulunamadı.</p>
+                  <p>Kesim veya işçilik gideri bulunamadı.</p>
                   <button
                     type="button"
                     className="cc-btn cc-btn-sm"
@@ -980,8 +974,7 @@ export function SupurgelikCostList() {
                       <div className="cc-supurgelik-source-row" key={item.typeCode}>
                         <div className="cc-supurgelik-source-material">
                           <strong>{item.typeName}</strong>
-                          <span>Ortak grup gideri</span>
-                          <code>{item.typeCode}</code>
+                          <span>Tüm süpürgelik hesaplarında ortak</span>
                         </div>
 
                         {editing ? (
@@ -1050,13 +1043,12 @@ export function SupurgelikCostList() {
               )}
 
               <p className="cc-note">
-                Değişiklik product-level kayıt oluşturmaz; eski grup dönemi kapanır,
-                yeni ExtraCostValue ve audit aynı transaction içinde oluşturulur.
+                Değişiklikten sonra maliyetler otomatik olarak yeniden hesaplanır.
               </p>
 
               <div className="cc-supurgelik-source-section-heading cc-supurgelik-source-section-divider">
                 <span>Fiyatlandırma</span>
-                <small>SUPURGELIK grup kapsamı · kâr oranı</small>
+                <small>Tüm süpürgelik ürünleri için kâr oranı</small>
               </div>
 
               {sourcePricingError ? (
@@ -1069,7 +1061,7 @@ export function SupurgelikCostList() {
                 </div>
               ) : sourcePricing == null ? (
                 <div className="cc-empty">
-                  <p>Aktif SUPURGELIK grup kâr oranı bulunamadı.</p>
+                  <p>Kâr oranı bulunamadı.</p>
                   <button
                     type="button"
                     className="cc-btn cc-btn-sm"
@@ -1083,8 +1075,7 @@ export function SupurgelikCostList() {
                   <div className="cc-supurgelik-source-row">
                     <div className="cc-supurgelik-source-material">
                       <strong>Kâr Oranı</strong>
-                      <span>Ortak grup fiyatlandırması</span>
-                      <code>profitRate</code>
+                      <span>Tüm süpürgelik ürünleri</span>
                     </div>
 
                     {editingProfitRate ? (
@@ -1149,14 +1140,12 @@ export function SupurgelikCostList() {
               )}
 
               <p className="cc-note">
-                Değişiklik product-level kâr kaydı oluşturmaz; eski grup sürümü
-                kapanır, yeni PricingSetting ve audit aynı transaction içinde
-                oluşturulur.
+                Değişiklikten sonra satış fiyatları yeniden hesaplanır.
               </p>
 
               <div className="cc-supurgelik-source-section-heading cc-supurgelik-source-section-divider">
                 <span>Dekoratif Oranlar</span>
-                <small>SUPURGELIK grup + kalınlık · 12 / 14 / 18 mm</small>
+                <small>12 / 14 / 18 mm kalınlıklar</small>
               </div>
 
               {sourceDecorativeRatesError ? (
@@ -1188,7 +1177,6 @@ export function SupurgelikCostList() {
                       <div className="cc-supurgelik-source-material">
                         <strong>{item.thicknessMm} mm</strong>
                         <span>Kalınlık bazlı dekoratif fark</span>
-                        <code>DECORATIVE</code>
                       </div>
 
                       {editingDecorativeThicknessMm === item.thicknessMm ? (
@@ -1252,14 +1240,12 @@ export function SupurgelikCostList() {
               )}
 
               <p className="cc-note">
-                8 / 9 / 10 mm oran oluşturmaz. Eski kalınlık sürümü kapanır,
-                yeni PricingThicknessModifier ve audit aynı transaction içinde
-                oluşturulur.
+                Dekoratif oran yalnız 12, 14 ve 18 mm için geçerlidir.
               </p>
 
               <div className="cc-supurgelik-source-section-heading cc-supurgelik-source-section-divider">
                 <span>PP Sarma</span>
-                <small>SUPURGELIK · yalnız PP varyantları</small>
+                <small>Yalnız PP sarmalı ürünlerde kullanılır</small>
               </div>
 
               {sourcePpWrappingError ? (
@@ -1281,7 +1267,6 @@ export function SupurgelikCostList() {
                           ? 'Tanımlı değil'
                           : formatTryTwoDecimals(sourcePpWrapping.amount)}
                       </span>
-                      <code>PP_WRAPPING</code>
                     </div>
                     <form
                       className="cc-supurgelik-source-edit"
@@ -1314,9 +1299,7 @@ export function SupurgelikCostList() {
               )}
 
               <p className="cc-note">
-                Değer girilene kadar PP ürünlerinde nakit fiyat yayımlanmaz.
-                Eski sürüm kapanır, yeni ExtraCostValue ve audit aynı
-                transaction içinde oluşturulur.
+                Değer girilene kadar PP ürünlerinde satış fiyatı yayınlanmaz.
               </p>
             </div>
           </aside>

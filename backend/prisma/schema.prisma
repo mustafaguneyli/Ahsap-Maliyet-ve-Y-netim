@@ -43,6 +43,7 @@ model ProductGroup {
   extraCostValues ExtraCostValue[]
   pricingSettings PricingSetting[]
   pricingThicknessModifiers PricingThicknessModifier[]
+  citaPublishedPriceBands CitaPublishedPriceBand[]
 
   @@map("product_groups")
 }
@@ -359,6 +360,42 @@ model PriceOverride {
 
   @@index([productId, productSizeId])
   @@map("price_overrides")
+}
+
+/// Çıta yayınlanmış satış fiyat bandı. productionCost'tan türetilmez.
+/// cashPrice ve cardPrice bağımsız master değerlerdir; kart nakit × 1.20 hesaplanmaz.
+/// Tekillik: migration SQL partial unique (aktif + açık dönem, grup + min/max en).
+model CitaPublishedPriceBand {
+  id             String    @id @default(uuid()) @db.Uuid
+  productGroupId String    @map("product_group_id") @db.Uuid
+  minWidthMm     Int       @map("min_width_mm")
+  maxWidthMm     Int       @map("max_width_mm")
+  cashPrice      Decimal   @map("cash_price") @db.Decimal(14, 4)
+  cardPrice      Decimal   @map("card_price") @db.Decimal(14, 4)
+  isActive       Boolean   @default(true) @map("is_active")
+  effectiveFrom  DateTime  @map("effective_from")
+  effectiveTo    DateTime? @map("effective_to")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  productGroup ProductGroup @relation(fields: [productGroupId], references: [id], onDelete: Restrict)
+  thicknesses  CitaPublishedPriceBandThickness[]
+
+  @@index([productGroupId, minWidthMm, maxWidthMm], map: "cita_published_price_bands_range_idx")
+  @@map("cita_published_price_bands")
+}
+
+/// Bir fiyat bandının kapsadığı MDF kalınlıkları. 10/22/30 mm bu tabloda yoktur.
+model CitaPublishedPriceBandThickness {
+  id          String @id @default(uuid()) @db.Uuid
+  bandId      String @map("band_id") @db.Uuid
+  thicknessMm Int    @map("thickness_mm")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  band CitaPublishedPriceBand @relation(fields: [bandId], references: [id], onDelete: Restrict)
+
+  @@unique([bandId, thicknessMm])
+  @@map("cita_published_price_band_thicknesses")
 }
 
 /// Append-only değişiklik izi. Fiyat geçmişi raw_material_prices üzerindedir.

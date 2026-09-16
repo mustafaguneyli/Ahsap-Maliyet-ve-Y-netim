@@ -307,3 +307,97 @@ const _supurgelikCostContractOk: SupurgelikCostRow extends SupurgelikCostRowCont
   ? true
   : never = true;
 void _supurgelikCostContractOk;
+
+export const CITA_CUSTOM_THICKNESS_MM = [
+  '10',
+  '12',
+  '14',
+  '16',
+  '18',
+  '22',
+  '30',
+] as const;
+
+export type CitaCustomThicknessMm = (typeof CITA_CUSTOM_THICKNESS_MM)[number];
+export type CitaNetSource = 'MASTER' | 'CALCULATED_CUT_RULE';
+export type CitaExtraCostCode = 'CUTTING' | 'LABOR';
+export type CitaStatusCode =
+  | 'EXTRA_COST_MISSING'
+  | 'RAW_MATERIAL_PRICE_MISSING'
+  | null;
+
+export type CitaPublishedPriceStatusCode = 'CITA_PUBLISHED_PRICE_MISSING' | null;
+
+export type CitaPublishedPricing = {
+  pricingAvailable: boolean;
+  priceBand: {
+    minWidthMm: number;
+    maxWidthMm: number;
+    displayName?: string;
+  } | null;
+  publishedCashPrice: string | null;
+  publishedCardPrice: string | null;
+  statusCode: CitaPublishedPriceStatusCode;
+};
+
+export type CitaCostRow = {
+  productCode: 'CITA';
+  thicknessMm: string;
+  widthMm: string;
+  lengthMm: string;
+  rawMaterial: {
+    code: string;
+    thicknessMm: string;
+    sheetWidthMm: number;
+    sheetLengthMm: number;
+  };
+  cut?: {
+    bladeAllowanceMm: number;
+    countSideMm: number;
+    effectiveCutPitchMm: string;
+  };
+  productionYield: {
+    netQty: number;
+    source: CitaNetSource;
+  };
+  sheetPrice: {
+    priceType: 'CARD_INSTALLMENT';
+    amount: string;
+  } | null;
+  mdfUnitCost: string | null;
+  extraCosts: Array<{
+    code: CitaExtraCostCode;
+    amount: string;
+  }>;
+  extraCostsTotal: string | null;
+  productionCost: string | null;
+  extraCostsAvailable?: boolean;
+  missingExtraCosts: CitaExtraCostCode[];
+  statusCode: CitaStatusCode;
+  pricing?: CitaPublishedPricing;
+};
+
+export type CitaCostListResponse = {
+  productCode: 'CITA';
+  productName: string;
+  asOf: string;
+  verifiedMeasureCount: number;
+  rows: CitaCostRow[];
+};
+
+export function fetchCitaCostList(): Promise<CitaCostListResponse> {
+  return apiRequest<CitaCostListResponse>('/cost-calculation/cita/list');
+}
+
+export function fetchCitaProductionCost(query: {
+  thicknessMm: string;
+  widthMm: string;
+  lengthMm: string;
+}): Promise<CitaCostRow> {
+  const params = new URLSearchParams({
+    thicknessMm: query.thicknessMm,
+    widthMm: query.widthMm,
+    lengthMm: query.lengthMm,
+  });
+  return apiRequest<CitaCostRow>(`/cost-calculation/cita?${params.toString()}`);
+}

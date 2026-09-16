@@ -671,7 +671,7 @@ describe('PervazCostTable UI smoke (mevcut kaynak, yeni özellik yok)', () => {
     expect(tableSrc).toContain('<th colSpan={2}>Kılçık</th>');
     expect(tableSrc).toContain('Nakit Satış');
     expect(tableSrc).toContain('Kart/Taksit');
-    expect(tableSrc).toContain('ROUNDUP');
+    expect(tableSrc).toContain('Yuvarlanmış');
     expect(tableSrc).toContain('Düzeltme');
     expect(tableSrc).toContain('Dek. Fark %');
     expect(tableSrc).toContain('Dek. Fark ₺');

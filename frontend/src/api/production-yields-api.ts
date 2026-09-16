@@ -1,7 +1,18 @@
 import { apiRequest } from '../lib/api';
 
+export type ProductionYieldUsage = {
+  productId: string;
+  productCode: string;
+  productName: string;
+  productGroupId: string;
+  productGroupCode: string;
+  productGroupName: string;
+  source: 'PRODUCT_SCOPED' | 'RECIPE' | 'GENERIC';
+};
+
 export type ProductionYield = {
   id: string;
+  productId: string | null;
   rawMaterialId: string;
   pieceWidthMm: number;
   pieceLengthMm: number;
@@ -19,6 +30,17 @@ export type ProductionYield = {
     surfaceType: string | null;
     isActive: boolean;
   };
+  product: {
+    id: string;
+    code: string;
+    name: string;
+    productGroup: {
+      id: string;
+      code: string;
+      name: string;
+    };
+  } | null;
+  usages: ProductionYieldUsage[];
 };
 
 export type ListProductionYieldsParams = {
@@ -27,6 +49,8 @@ export type ListProductionYieldsParams = {
   pieceWidth?: number;
   pieceLength?: number;
   isActive?: boolean;
+  productGroupId?: string;
+  productId?: string;
 };
 
 export type CreateProductionYieldPayload = {
@@ -44,6 +68,8 @@ function toQuery(params: ListProductionYieldsParams): string {
   if (params.pieceWidth !== undefined) search.set('pieceWidth', String(params.pieceWidth));
   if (params.pieceLength !== undefined) search.set('pieceLength', String(params.pieceLength));
   if (params.isActive !== undefined) search.set('isActive', String(params.isActive));
+  if (params.productGroupId) search.set('productGroupId', params.productGroupId);
+  if (params.productId) search.set('productId', params.productId);
   const q = search.toString();
   return q ? `?${q}` : '';
 }

@@ -9,6 +9,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { assertExtraCostValueScope } from './extra-cost-value.validation';
 import { selectCurrentExtraCostValue } from './current-extra-cost-value';
 import { UpdateExtraCostValueDto } from './dto/update-extra-cost-value.dto';
+import { CITA_EXTRA_COST_TYPE_ORDER } from './cita-extra-cost';
 import { PERVAZ_EXTRA_COST_TYPE_ORDER } from './pervaz-extra-cost-seed';
 import { SUPURGELIK_EXTRA_COST_TYPE_ORDER, SUPURGELIK_PP_WRAPPING_TYPE_CODE, SUPURGELIK_PP_WRAPPING_TYPE_NAME, SUPURGELIK_UPDATABLE_EXTRA_COST_TYPE_ORDER } from './supurgelik-extra-cost-seed';
 
@@ -25,7 +26,11 @@ export const DOOR_FRAME_EXTRA_COST_TYPE_ORDER = [
 export type DoorFrameExtraCostTypeCode =
   (typeof DOOR_FRAME_EXTRA_COST_TYPE_ORDER)[number];
 
-export type ExtraCostProductGroupCode = 'door_frame' | 'PERVAZ' | 'SUPURGELIK';
+export type ExtraCostProductGroupCode =
+  | 'door_frame'
+  | 'PERVAZ'
+  | 'SUPURGELIK'
+  | 'CITA';
 
 function extraCostTypeOrderForGroup(
   productGroupCode: string,
@@ -39,8 +44,11 @@ function extraCostTypeOrderForGroup(
   if (productGroupCode === 'SUPURGELIK') {
     return SUPURGELIK_EXTRA_COST_TYPE_ORDER;
   }
+  if (productGroupCode === 'CITA') {
+    return CITA_EXTRA_COST_TYPE_ORDER;
+  }
   throw new BadRequestException(
-    'productGroup şu an yalnızca door_frame, PERVAZ veya SUPURGELIK olabilir.',
+    'productGroup şu an yalnızca door_frame, PERVAZ, SUPURGELIK veya CITA olabilir.',
   );
 }
 
@@ -117,7 +125,7 @@ export class ExtraCostsService {
         throw new NotFoundException(`Ek maliyet tipi bulunamadı: ${code}`);
       }
 
-      if (productGroupCode === 'SUPURGELIK') {
+      if (productGroupCode === 'SUPURGELIK' || productGroupCode === 'CITA') {
         const currentCandidates = type.values.filter(
           (value) =>
             value.isActive &&
@@ -126,7 +134,7 @@ export class ExtraCostsService {
         );
         if (currentCandidates.length > 1) {
           throw new BadRequestException(
-            `SUPURGELIK / ${code} için aynı anda geçerli birden fazla aktif ExtraCostValue bulundu.`,
+            `${productGroupCode} / ${code} için aynı anda geçerli birden fazla aktif ExtraCostValue bulundu.`,
           );
         }
       }

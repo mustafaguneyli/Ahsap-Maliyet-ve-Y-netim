@@ -7,11 +7,12 @@ import { Transform } from 'class-transformer';
  */
 export class UpdateExtraCostValueDto {
   @IsNotEmpty({ message: 'productGroup zorunludur.' })
-  @IsIn(['door_frame', 'PERVAZ', 'SUPURGELIK'], {
-    message: 'productGroup şu an yalnızca door_frame, PERVAZ veya SUPURGELIK olabilir.',
+  @IsIn(['door_frame', 'PERVAZ', 'SUPURGELIK', 'CITA'], {
+    message:
+      'productGroup şu an yalnızca door_frame, PERVAZ, SUPURGELIK veya CITA olabilir.',
   })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  productGroup!: 'door_frame' | 'PERVAZ' | 'SUPURGELIK';
+  productGroup!: 'door_frame' | 'PERVAZ' | 'SUPURGELIK' | 'CITA';
 
   @IsNotEmpty({ message: 'Yeni tutar zorunludur.' })
   @Matches(/^\d+(\.\d{1,4})?$/, {

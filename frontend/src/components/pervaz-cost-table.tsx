@@ -70,7 +70,7 @@ export function PervazCostTable({ rows, mode }: Props) {
             </>
           ) : (
             <>
-              <th className="cc-th-sub">ROUNDUP</th>
+              <th className="cc-th-sub">Yuvarlanmış</th>
               <th className="cc-th-sub">Düzeltme</th>
             </>
           )}
@@ -103,7 +103,7 @@ export function PervazCostTable({ rows, mode }: Props) {
               <td className="cc-col-thickness">{row.thicknessMm} mm</td>
               <td
                 className="cc-qty"
-                title={`${row.mainPiece.rawMaterialCode} · ${row.mainPiece.yieldSource}`}
+                title={row.mainPiece.rawMaterialCode}
               >
                 {row.mainPiece.netQty}
               </td>
@@ -117,7 +117,7 @@ export function PervazCostTable({ rows, mode }: Props) {
               </td>
               <td
                 className="cc-qty"
-                title={`${row.kilcik.rawMaterialCode} · ${row.kilcik.yieldSource}`}
+                title={row.kilcik.rawMaterialCode}
               >
                 {row.kilcik.netQty}
               </td>

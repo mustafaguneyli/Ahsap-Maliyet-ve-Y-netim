@@ -23,6 +23,7 @@ describe('ProductionYieldsService', () => {
 
   const createdYield = {
     id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+    productId: null,
     rawMaterialId: activeMaterial.id,
     pieceWidthMm: 100,
     pieceLengthMm: 2100,
@@ -68,7 +69,13 @@ describe('ProductionYieldsService', () => {
           jest.fn().mockResolvedValue(null),
         findUnique:
           overrides?.findYieldUnique ?? jest.fn().mockResolvedValue(createdYield),
-        findMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      product: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      productSize: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
       $transaction: jest.fn(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
     };
@@ -253,5 +260,52 @@ describe('ProductionYieldsService', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
 
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('findAll: productGroupId generic kapı kasası kaydını süpürgelikten ayırır', async () => {
+    const doorGroup = {
+      id: 'g-door',
+      code: 'door_frame',
+      name: 'Kapı Kasası',
+      isActive: true,
+    };
+    const doorProduct = {
+      id: 'p-34',
+      code: '34_MM',
+      name: '34 MM MDF Kasa',
+      isActive: true,
+      productGroup: doorGroup,
+    };
+    const genericDoorYield = {
+      ...createdYield,
+      productId: null,
+      product: null,
+      recipeItems: [],
+      rawMaterial: {
+        ...activeMaterial,
+        code: 'MDF-22-2100X2800-ZIMPARALI',
+      },
+    };
+
+    const { service, prisma } = buildService();
+    prisma.productionYield.findMany
+      .mockResolvedValueOnce([genericDoorYield])
+      .mockResolvedValueOnce([]);
+    prisma.productSize.findMany.mockResolvedValue([
+      { widthMm: 100, lengthMm: 2100 },
+      { widthMm: 80, lengthMm: 2800 },
+    ]);
+    prisma.product.findMany.mockResolvedValue([doorProduct]);
+
+    const result = await service.findAll({ productGroupId: doorGroup.id });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].usages).toEqual([
+      expect.objectContaining({
+        productGroupId: doorGroup.id,
+        productCode: '34_MM',
+        source: 'GENERIC',
+      }),
+    ]);
   });
 });

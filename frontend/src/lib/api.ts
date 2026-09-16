@@ -77,7 +77,7 @@ export async function apiRequest<T>(
   }
 
   if (!response.ok) {
-    throw new ApiError(response.status, body, `İstek başarısız (HTTP ${response.status}).`);
+    throw new ApiError(response.status, body, 'İşlem tamamlanamadı.');
   }
 
   return body as T;

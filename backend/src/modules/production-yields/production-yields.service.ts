@@ -15,11 +15,47 @@ import {
   calculateDoorFrameSuggestedQty,
   YieldCalculationResult,
 } from './production-yield-calculator';
+import {
+  collectRowUsages,
+  type ProductionYieldUsage,
+  type YieldUsageProduct,
+} from './production-yield-usage';
 
 const ENTITY_TYPE = 'ProductionYield';
 
+const yieldListInclude = {
+  rawMaterial: true,
+  product: { include: { productGroup: true } },
+  recipeItems: {
+    include: {
+      recipe: {
+        include: {
+          product: { include: { productGroup: true } },
+        },
+      },
+    },
+  },
+} as const;
+
+const yieldWriteInclude = {
+  rawMaterial: true,
+  product: { include: { productGroup: true } },
+} as const;
+
+export type ProductionYieldProductRef = {
+  id: string;
+  code: string;
+  name: string;
+  productGroup: {
+    id: string;
+    code: string;
+    name: string;
+  };
+};
+
 export type ProductionYieldListItem = {
   id: string;
+  productId: string | null;
   rawMaterialId: string;
   pieceWidthMm: number;
   pieceLengthMm: number;
@@ -37,6 +73,8 @@ export type ProductionYieldListItem = {
     surfaceType: string | null;
     isActive: boolean;
   };
+  product: ProductionYieldProductRef | null;
+  usages: ProductionYieldUsage[];
 };
 
 @Injectable()
@@ -65,28 +103,113 @@ export class ProductionYieldsService {
       where.rawMaterial = { thicknessMm: query.thickness };
     }
 
-    const rows = await this.prisma.productionYield.findMany({
-      where,
-      include: { rawMaterial: true },
-      orderBy: [
-        { rawMaterial: { thicknessMm: 'asc' } },
-        { pieceWidthMm: 'asc' },
-        { pieceLengthMm: 'asc' },
-      ],
+    const [rows, productSizes, scopedRows, products] = await Promise.all([
+      this.prisma.productionYield.findMany({
+        where,
+        include: yieldListInclude,
+        orderBy: [
+          { rawMaterial: { thicknessMm: 'asc' } },
+          { pieceWidthMm: 'asc' },
+          { pieceLengthMm: 'asc' },
+        ],
+      }),
+      this.prisma.productSize.findMany({
+        select: { widthMm: true, lengthMm: true },
+      }),
+      this.prisma.productionYield.findMany({
+        where: { productId: { not: null } },
+        select: { productId: true },
+        distinct: ['productId'],
+      }),
+      this.prisma.product.findMany({
+        where: { isActive: true, productGroup: { isActive: true } },
+        include: { productGroup: true },
+      }),
+    ]);
+
+    const scopedProductIds = new Set(
+      scopedRows
+        .map((row) => row.productId)
+        .filter((id): id is string => id != null),
+    );
+    const genericConsumerProducts = products.filter(
+      (product) => !scopedProductIds.has(product.id),
+    ) as YieldUsageProduct[];
+    const productSizeKeys = new Set(
+      productSizes.map((size) => `${size.widthMm}|${size.lengthMm}`),
+    );
+
+    const items = rows.map((row) => {
+      const usages = collectRowUsages(row, {
+        genericConsumerProducts,
+        productSizeKeys,
+      });
+      return this.toListItem(row, usages);
     });
 
-    return rows.map((row) => this.toListItem(row));
+    const filtered = items.filter((item) => {
+      if (query.productId) {
+        return item.usages.some((usage) => usage.productId === query.productId);
+      }
+      if (query.productGroupId) {
+        return item.usages.some(
+          (usage) => usage.productGroupId === query.productGroupId,
+        );
+      }
+      return true;
+    });
+
+    return filtered.sort((a, b) => compareYieldListItems(a, b));
   }
 
   async findOne(id: string): Promise<ProductionYieldListItem> {
     const row = await this.prisma.productionYield.findUnique({
       where: { id },
-      include: { rawMaterial: true },
+      include: yieldListInclude,
     });
     if (!row) {
       throw new NotFoundException(`Production yield bulunamadı: ${id}`);
     }
-    return this.toListItem(row);
+    const usages = await this.resolveUsagesForRows([row]);
+    return this.toListItem(row, usages.get(row.id) ?? []);
+  }
+
+  private async resolveUsagesForRows(
+    rows: Array<Prisma.ProductionYieldGetPayload<{ include: typeof yieldListInclude }>>,
+  ): Promise<Map<string, ProductionYieldUsage[]>> {
+    const [productSizes, scopedRows, products] = await Promise.all([
+      this.prisma.productSize.findMany({
+        select: { widthMm: true, lengthMm: true },
+      }),
+      this.prisma.productionYield.findMany({
+        where: { productId: { not: null } },
+        select: { productId: true },
+        distinct: ['productId'],
+      }),
+      this.prisma.product.findMany({
+        where: { isActive: true, productGroup: { isActive: true } },
+        include: { productGroup: true },
+      }),
+    ]);
+
+    const scopedProductIds = new Set(
+      scopedRows
+        .map((row) => row.productId)
+        .filter((id): id is string => id != null),
+    );
+    const genericConsumerProducts = products.filter(
+      (product) => !scopedProductIds.has(product.id),
+    ) as YieldUsageProduct[];
+    const productSizeKeys = new Set(
+      productSizes.map((size) => `${size.widthMm}|${size.lengthMm}`),
+    );
+
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        collectRowUsages(row, { genericConsumerProducts, productSizeKeys }),
+      ]),
+    );
   }
 
   /**
@@ -170,7 +293,7 @@ export class ProductionYieldsService {
             netQty: dto.netQty,
             isActive,
           },
-          include: { rawMaterial: true },
+          include: yieldWriteInclude,
         });
 
         await this.auditService.record(
@@ -227,7 +350,7 @@ export class ProductionYieldsService {
 
     const existing = await this.prisma.productionYield.findUnique({
       where: { id },
-      include: { rawMaterial: true },
+      include: yieldWriteInclude,
     });
     if (!existing) {
       throw new NotFoundException(`Production yield bulunamadı: ${id}`);
@@ -302,7 +425,7 @@ export class ProductionYieldsService {
             netQty: dto.netQty,
             isActive: true,
           },
-          include: { rawMaterial: true },
+          include: yieldWriteInclude,
         });
 
         await this.auditService.record(
@@ -348,10 +471,34 @@ export class ProductionYieldsService {
   }
 
   private toListItem(
-    row: Prisma.ProductionYieldGetPayload<{ include: { rawMaterial: true } }>,
+    row: {
+      id: string;
+      productId: string | null;
+      rawMaterialId: string;
+      pieceWidthMm: number;
+      pieceLengthMm: number;
+      netQty: number;
+      isActive: boolean;
+      createdAt: Date;
+      updatedAt: Date;
+      rawMaterial: {
+        id: string;
+        code: string;
+        name: string;
+        thicknessMm: { toString(): string };
+        sheetWidthMm: number;
+        sheetLengthMm: number;
+        surfaceType: string | null;
+        isActive: boolean;
+      };
+      product?: YieldUsageProduct | null;
+    },
+    usages?: ProductionYieldUsage[],
   ): ProductionYieldListItem {
+    const product = row.product ? toProductRef(row.product) : null;
     return {
       id: row.id,
+      productId: row.productId,
       rawMaterialId: row.rawMaterialId,
       pieceWidthMm: row.pieceWidthMm,
       pieceLengthMm: row.pieceLengthMm,
@@ -369,6 +516,54 @@ export class ProductionYieldsService {
         surfaceType: row.rawMaterial.surfaceType,
         isActive: row.rawMaterial.isActive,
       },
+      product,
+      usages:
+        usages ??
+        (product
+          ? [
+              {
+                productId: product.id,
+                productCode: product.code,
+                productName: product.name,
+                productGroupId: product.productGroup.id,
+                productGroupCode: product.productGroup.code,
+                productGroupName: product.productGroup.name,
+                source: 'PRODUCT_SCOPED',
+              },
+            ]
+          : []),
     };
   }
+}
+
+function toProductRef(product: YieldUsageProduct): ProductionYieldProductRef {
+  return {
+    id: product.id,
+    code: product.code,
+    name: product.name,
+    productGroup: {
+      id: product.productGroup.id,
+      code: product.productGroup.code,
+      name: product.productGroup.name,
+    },
+  };
+}
+
+function compareYieldListItems(
+  a: ProductionYieldListItem,
+  b: ProductionYieldListItem,
+): number {
+  const aGroup = a.usages[0]?.productGroupName ?? '';
+  const bGroup = b.usages[0]?.productGroupName ?? '';
+  const aProduct = a.usages[0]?.productName ?? '';
+  const bProduct = b.usages[0]?.productName ?? '';
+  return (
+    aGroup.localeCompare(bGroup, 'tr') ||
+    aProduct.localeCompare(bProduct, 'tr') ||
+    a.rawMaterial.thicknessMm.localeCompare(b.rawMaterial.thicknessMm, 'tr', {
+      numeric: true,
+    }) ||
+    a.pieceWidthMm - b.pieceWidthMm ||
+    a.pieceLengthMm - b.pieceLengthMm
+  );
 }

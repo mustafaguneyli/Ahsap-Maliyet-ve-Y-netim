@@ -16,6 +16,7 @@ import { seedDoorFrameProducts } from '../src/modules/products/door-frame-produc
 import { seedDoorFrameProductSizes } from '../src/modules/products/door-frame-product-size-seed';
 import { seedPervazProducts } from '../src/modules/products/pervaz-product-seed';
 import { seedSupurgelikProductMaster } from '../src/modules/products/supurgelik-product-seed';
+import { seedCitaProductMaster } from '../src/modules/products/cita-product-seed';
 import { seedKilcikTypes } from '../src/modules/pervaz/kilcik-type-seed';
 import { seedAyarliPervazKilcikYields } from '../src/modules/pervaz/ayarli-pervaz-kilcik-yield-seed';
 import { seedDekoratifPervazKilcikYields } from '../src/modules/pervaz/dekoratif-pervaz-kilcik-yield-seed';
@@ -25,6 +26,8 @@ import { seedAyarliPervazProductionYields } from '../src/modules/production-yiel
 import { seedDekoratifPervazProductionYields } from '../src/modules/production-yields/pervaz-dekoratif-yield-seed-data';
 import { seedDekoratifGenisKilcikProductionYields } from '../src/modules/production-yields/pervaz-dekoratif-genis-kilcik-yield-seed-data';
 import { seedSupurgelikProductionYields } from '../src/modules/production-yields/supurgelik-yield-seed-data';
+import { seedCitaProductionYields } from '../src/modules/production-yields/cita-yield-seed-data';
+import { seedCitaPublishedPriceBands } from '../src/modules/pricing/cita-published-price-band-seed';
 import { seedSupurgelik9MmRawMaterial } from '../src/modules/materials/supurgelik-raw-material-seed';
 
 /**
@@ -409,6 +412,49 @@ async function main(): Promise<void> {
     console.log(
       `Süpürgelik master seed: grupYeni=${supurgelikProductReport.productGroupCreated}, ürünYeni=${supurgelikProductReport.productsCreated}, ürünMevcut=${supurgelikProductReport.productsSkippedExisting}, ölçüYeni=${supurgelikProductReport.sizesCreated}, ölçüMevcut=${supurgelikProductReport.sizesSkippedExisting}`,
     );
+
+    const citaProductReport = await seedCitaProductMaster(prisma);
+    console.log(
+      `Çıta master seed: grupYeni=${citaProductReport.productGroupCreated}, ürünYeni=${citaProductReport.productsCreated}, ürünMevcut=${citaProductReport.productsSkippedExisting}, ölçüYeni=${citaProductReport.sizesCreated}, ölçüMevcut=${citaProductReport.sizesSkippedExisting}`,
+    );
+
+    const citaYieldReport = await seedCitaProductionYields(prisma);
+    console.log(
+      `Çıta NET seed: beklenen=${citaYieldReport.totalExpected}, yeni=${citaYieldReport.created}, aynı=${citaYieldReport.unchanged}, conflict=${citaYieldReport.conflicts.length}, eksikHamMadde=${citaYieldReport.missingMaterials.length}`,
+    );
+    if (citaYieldReport.missingProduct) {
+      console.warn('Çıta NET seed: aktif CITA ürünü bulunamadı, yield yazılmadı.');
+    }
+    if (citaYieldReport.missingMaterials.length > 0) {
+      console.warn(
+        'Çıta eksik/inactive ham maddeler:',
+        citaYieldReport.missingMaterials.join(', '),
+      );
+    }
+    if (citaYieldReport.conflicts.length > 0) {
+      console.warn('Çıta NET conflict (overwrite yok):');
+      for (const conflict of citaYieldReport.conflicts) {
+        console.warn(
+          `  ${conflict.materialCode} ${conflict.pieceWidthMm}×${conflict.pieceLengthMm}: DB=${conflict.existingNetQty}, seed=${conflict.seedNetQty}`,
+        );
+      }
+    }
+
+    const citaPublishedPriceReport = await seedCitaPublishedPriceBands(prisma);
+    console.log(
+      `Çıta yayınlanmış fiyat bandı seed: beklenen=${citaPublishedPriceReport.totalExpected}, yeni=${citaPublishedPriceReport.created}, aynı=${citaPublishedPriceReport.unchanged}, conflict=${citaPublishedPriceReport.conflicts.length}`,
+    );
+    if (citaPublishedPriceReport.missingProductGroup) {
+      console.warn('Çıta yayınlanmış fiyat seed: aktif CITA grubu bulunamadı.');
+    }
+    if (citaPublishedPriceReport.conflicts.length > 0) {
+      console.warn('Çıta yayınlanmış fiyat conflict (overwrite yok):');
+      for (const conflict of citaPublishedPriceReport.conflicts) {
+        console.warn(
+          `  ${conflict.minWidthMm}-${conflict.maxWidthMm} mm: DB nakit=${conflict.existingCashPrice} kart=${conflict.existingCardPrice}, seed nakit=${conflict.seedCashPrice} kart=${conflict.seedCardPrice}`,
+        );
+      }
+    }
 
     const supurgelikYieldReport = await seedSupurgelikProductionYields(prisma);
     console.log(

@@ -21,6 +21,8 @@ import {
 } from '../api/pricing-settings-api';
 import { ApiError } from '../lib/api';
 import { formatPercentRate, formatTry } from '../lib/money';
+import { CitaCostList } from '../components/cita-cost-list';
+import { OrderCostDrawer } from '../components/order-cost-drawer';
 import { PervazCostTable } from '../components/pervaz-cost-table';
 import { SupurgelikCostList } from '../components/supurgelik-cost-list';
 import {
@@ -29,7 +31,7 @@ import {
 } from '../api/price-overrides-api';
 import './cost-calculation-page.css';
 
-type ProductGroup = 'door_frame' | 'PERVAZ' | 'SUPURGELIK';
+type ProductGroup = 'door_frame' | 'PERVAZ' | 'SUPURGELIK' | 'CITA';
 type DoorFrameVariant = '34_MM' | '30_MM';
 type PervazProduct =
   | 'AYARLI_PERVAZ'
@@ -160,6 +162,7 @@ export function CostCalculationPage() {
   const [priceEditReason, setPriceEditReason] = useState('');
   const [priceEditSaving, setPriceEditSaving] = useState(false);
   const [priceEditError, setPriceEditError] = useState<string | null>(null);
+  const [orderDrawerOpen, setOrderDrawerOpen] = useState(false);
 
   const thicknesses = useMemo(
     () => (variant === '34_MM' ? (['22', '12'] as const) : (['18', '12'] as const)),
@@ -408,11 +411,11 @@ export function CostCalculationPage() {
         reason: priceEditReason.trim() || undefined,
       });
       setPriceEditRow(null);
-      setNotice('Nakit override kaydedildi. Tablo güncelleniyor…');
+      setNotice('Nakit fiyat kaydedildi. Tablo güncelleniyor…');
       await reloadCosts(variant);
       setNotice('Yayınlanan nakit fiyatı uygulandı.');
     } catch (err) {
-      setPriceEditError(err instanceof ApiError ? err.message : 'Override kaydedilemedi.');
+      setPriceEditError(err instanceof ApiError ? err.message : 'Nakit fiyat kaydedilemedi.');
     } finally {
       setPriceEditSaving(false);
     }
@@ -429,11 +432,13 @@ export function CostCalculationPage() {
         priceEditRow.lengthCm,
       );
       setPriceEditRow(null);
-      setNotice('Override kaldırıldı. Formül fiyatı kullanılıyor…');
+      setNotice('Özel nakit fiyat kaldırıldı. Hesaplanan fiyat kullanılıyor…');
       await reloadCosts(variant);
-      setNotice('Formül nakit fiyatı uygulandı.');
+      setNotice('Hesaplanan nakit fiyatı uygulandı.');
     } catch (err) {
-      setPriceEditError(err instanceof ApiError ? err.message : 'Override kaldırılamadı.');
+      setPriceEditError(
+        err instanceof ApiError ? err.message : 'Özel nakit fiyat kaldırılamadı.',
+      );
     } finally {
       setPriceEditSaving(false);
     }
@@ -615,19 +620,29 @@ export function CostCalculationPage() {
             <option value="door_frame">Kapı Kasası</option>
             <option value="PERVAZ">Pervaz</option>
             <option value="SUPURGELIK">Süpürgelik</option>
+            <option value="CITA">Çıta</option>
           </select>
         </label>
 
-        {productGroup === 'door_frame' || productGroup === 'PERVAZ' ? (
+        <div className="cc-toolbar-actions">
           <button
             type="button"
-            className="cc-btn cc-btn-primary"
-            onClick={() => void loadSettingsIntoDrawer()}
-            disabled={settingsLoading || loading}
+            className="cc-btn"
+            onClick={() => setOrderDrawerOpen(true)}
           >
-            {settingsLoading ? 'Yükleniyor…' : 'Maliyet Ayarlarını Düzenle'}
+            Sipariş Maliyeti Hesapla
           </button>
-        ) : null}
+          {productGroup === 'door_frame' || productGroup === 'PERVAZ' ? (
+            <button
+              type="button"
+              className="cc-btn cc-btn-primary"
+              onClick={() => void loadSettingsIntoDrawer()}
+              disabled={settingsLoading || loading}
+            >
+              {settingsLoading ? 'Yükleniyor…' : 'Maliyet Ayarlarını Düzenle'}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {productGroup === 'PERVAZ' ? (
@@ -682,14 +697,6 @@ export function CostCalculationPage() {
               30 MM MDF KASA
             </button>
           </div>
-
-          <p className="cc-note">
-            Maliyet hesabı aktif <strong>K.Kartı / Taksitli</strong> ham madde alış fiyatı,
-            doğrulanmış <strong>NET adet</strong>, Kapı Kasası <strong>ek maliyetleri</strong>,
-            ürün <strong>KDV</strong>, <strong>kâr</strong> ve <strong>kredi kartı farkı</strong> oranı
-            ile yapılır. Girdi değerleri “Maliyet Ayarlarını Düzenle” ile değiştirilir; satış
-            fiyatları her istekte yeniden hesaplanır.
-          </p>
 
           {notice ? <div className="cc-notice">{notice}</div> : null}
           {error ? <div className="cc-alert">{error}</div> : null}
@@ -912,7 +919,7 @@ export function CostCalculationPage() {
 
               <div className="cc-pervaz-stats" aria-label="Pervaz liste özeti">
                 <div className="cc-pervaz-stat">
-                  <span>Doğrulanmış ölçü</span>
+                  <span>Ölçü sayısı</span>
                   <strong>{pervazData?.verifiedMeasureCount ?? '—'}</strong>
                 </div>
                 <div className="cc-pervaz-stat">
@@ -925,22 +932,8 @@ export function CostCalculationPage() {
                       : '—'}
                   </strong>
                 </div>
-                <div className="cc-pervaz-stat">
-                  <span>NET kaynağı</span>
-                  <strong>MASTER öncelikli</strong>
-                </div>
               </div>
             </div>
-
-            <p className="cc-note">
-              Yalnız aktif ve doğrulanmış <strong>Excel master NET</strong>{' '}
-              ölçüleri gösterilir. Nakit satış; MDF, ortak Pervaz masrafları,
-              aktif kâr oranı
-              {pervazProduct !== 'AYARLI_PERVAZ'
-                ? ', dekoratif fark ve ROUNDUP'
-                : ', ROUNDUP ve varsa satır düzeltmesi'}
-              {' ile '}her istekte yeniden hesaplanır.
-            </p>
 
             <div className="cc-pervaz-filters" aria-label="Pervaz liste filtreleri">
               <label className="cc-field cc-pervaz-search-field">
@@ -1016,7 +1009,7 @@ export function CostCalculationPage() {
                 </div>
               ) : !pervazData || pervazData.rows.length === 0 ? (
                 <div className="cc-empty">
-                  <p>Gösterilecek aktif doğrulanmış ölçü yok.</p>
+                  <p>Gösterilecek Pervaz ölçüsü yok.</p>
                   <button
                     type="button"
                     className="cc-btn cc-btn-sm"
@@ -1054,6 +1047,8 @@ export function CostCalculationPage() {
       ) : null}
 
       {productGroup === 'SUPURGELIK' ? <SupurgelikCostList /> : null}
+
+      {productGroup === 'CITA' ? <CitaCostList /> : null}
 
       {drawerOpen ? (
         <div className="cc-drawer-overlay" onClick={closeDrawer} role="presentation">
@@ -1184,7 +1179,7 @@ export function CostCalculationPage() {
                   ) : null}
                   {productGroup === 'PERVAZ' &&
                   pervazProduct === 'DEKORATIF_PERVAZ_GENIS_KILCIK' ? (
-                    <p className="cc-hint">Doğrulanmış kart fiyatı bulunmuyor.</p>
+                    <p className="cc-hint">Bu ürün için kart fiyatı yok.</p>
                   ) : null}
                 </section>
 
@@ -1276,8 +1271,7 @@ export function CostCalculationPage() {
                   />
                 </label>
                 <p className="cc-hint">
-                  Kart fiyatı yayınlanan nakit × kart farkı oranı ile ROUNDUP hesaplanır.
-                  Kart için ayrı override yoktur.
+                  Kart fiyatı, yayınlanan nakit fiyata kart farkı uygulanarak hesaplanır.
                 </p>
               </section>
 
@@ -1298,7 +1292,7 @@ export function CostCalculationPage() {
                   onClick={() => void onUseFormulaPrice()}
                   disabled={priceEditSaving || !priceEditRow.pricing.cashOverride}
                 >
-                  Formül fiyatını kullan
+                  Hesaplanan fiyata dön
                 </button>
                 <button
                   type="submit"
@@ -1311,6 +1305,10 @@ export function CostCalculationPage() {
             </form>
           </aside>
         </div>
+      ) : null}
+
+      {orderDrawerOpen ? (
+        <OrderCostDrawer onClose={() => setOrderDrawerOpen(false)} />
       ) : null}
     </section>
   );

@@ -33,4 +33,12 @@ export class ListProductionYieldsQueryDto {
   })
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsUUID('4')
+  productGroupId?: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  productId?: string;
 }

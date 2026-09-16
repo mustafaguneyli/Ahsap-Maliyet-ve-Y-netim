@@ -7,6 +7,7 @@ import {
   ProductionYield,
   replaceProductionYield,
 } from '../api/production-yields-api';
+import { listProductGroups, ProductGroupSummary } from '../api/product-groups-api';
 import { ApiError } from '../lib/api';
 import {
   cmToMm,
@@ -42,6 +43,24 @@ const emptyReplaceForm = (): ReplaceFormState => ({
   netQty: '',
   reason: '',
 });
+
+function uniqueNames(values: string[]): string[] {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
+}
+
+function formatUsageGroup(item: ProductionYield): string {
+  const names = uniqueNames((item.usages ?? []).map((usage) => usage.productGroupName));
+  return names.length > 0 ? names.join(', ') : '—';
+}
+
+function formatUsageProduct(item: ProductionYield): string {
+  const names = uniqueNames((item.usages ?? []).map((usage) => usage.productName));
+  if (names.length === 0) return '—';
+  if (names.length === 1) return names[0];
+  const groups = uniqueNames((item.usages ?? []).map((usage) => usage.productGroupName));
+  if (groups.length === 1) return 'Ortak kullanım';
+  return names.join(', ');
+}
 
 function validateCreateForm(form: FormState): string | null {
   if (!form.rawMaterialId) return 'Ham madde seçimi zorunludur.';
@@ -80,7 +99,8 @@ export function ProductionYieldsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const [materialFilter, setMaterialFilter] = useState('');
+  const [productGroups, setProductGroups] = useState<ProductGroupSummary[]>([]);
+  const [productFilter, setProductFilter] = useState('');
   const [thicknessFilter, setThicknessFilter] = useState('');
   const [pieceWidthFilter, setPieceWidthFilter] = useState('');
   const [pieceLengthFilter, setPieceLengthFilter] = useState('');
@@ -110,16 +130,22 @@ export function ProductionYieldsPage() {
     setError(null);
     try {
       const params: {
-        rawMaterialId?: string;
         thickness?: number;
         pieceWidth?: number;
         pieceLength?: number;
         isActive?: boolean;
+        productGroupId?: string;
+        productId?: string;
       } = {};
 
-      if (materialFilter) params.rawMaterialId = materialFilter;
       if (statusFilter === 'active') params.isActive = true;
       if (statusFilter === 'inactive') params.isActive = false;
+
+      if (productFilter.startsWith('group:')) {
+        params.productGroupId = productFilter.slice('group:'.length);
+      } else if (productFilter.startsWith('product:')) {
+        params.productId = productFilter.slice('product:'.length);
+      }
 
       if (thicknessFilter.trim()) {
         const t = Number(thicknessFilter.replace(',', '.'));
@@ -148,12 +174,17 @@ export function ProductionYieldsPage() {
     void loadMaterials().catch(() => {
       setError('Ham madde listesi yüklenemedi.');
     });
+    void listProductGroups()
+      .then((response) => setProductGroups(response.items))
+      .catch(() => {
+        setError('Ürün grupları yüklenemedi.');
+      });
   }, []);
 
   useEffect(() => {
     void loadYields();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [materialFilter, thicknessFilter, pieceWidthFilter, pieceLengthFilter, statusFilter]);
+  }, [productFilter, thicknessFilter, pieceWidthFilter, pieceLengthFilter, statusFilter]);
 
   const openCreate = () => {
     setDrawerMode('create');
@@ -329,15 +360,22 @@ export function ProductionYieldsPage() {
         <div className="rm-filters">
           <select
             className="rm-input"
-            value={materialFilter}
-            onChange={(e) => setMaterialFilter(e.target.value)}
-            aria-label="Ham madde filtresi"
+            value={productFilter}
+            onChange={(e) => setProductFilter(e.target.value)}
+            aria-label="Ürün filtresi"
           >
-            <option value="">Tüm ham maddeler</option>
-            {materials.map((m) => (
-              <option key={m.id} value={m.id}>
-                {formatRawMaterialOptionLabel(m)}
-              </option>
+            <option value="">Tüm Ürünler</option>
+            {productGroups.map((group) => (
+              <optgroup key={group.id} label={group.name}>
+                <option value={`group:${group.id}`}>{group.name}</option>
+                {group.products.length > 1
+                  ? group.products.map((product) => (
+                      <option key={product.id} value={`product:${product.id}`}>
+                        {product.name}
+                      </option>
+                    ))
+                  : null}
+              </optgroup>
             ))}
           </select>
 
@@ -396,6 +434,8 @@ export function ProductionYieldsPage() {
           <table className="rm-table">
             <thead>
               <tr>
+                <th>Ürün Grubu</th>
+                <th>Ürün</th>
                 <th>Ham Madde</th>
                 <th>MDF Kalınlığı</th>
                 <th>Tabaka Ölçüsü</th>
@@ -408,6 +448,8 @@ export function ProductionYieldsPage() {
             <tbody>
               {items.map((item) => (
                 <tr key={item.id}>
+                  <td>{formatUsageGroup(item)}</td>
+                  <td>{formatUsageProduct(item)}</td>
                   <td className="rm-name">{item.rawMaterial.name}</td>
                   <td>{item.rawMaterial.thicknessMm} mm</td>
                   <td>
@@ -575,8 +617,7 @@ export function ProductionYieldsPage() {
                 </p>
               ) : (
                 <p className="rm-hint">
-                  Öneri Excel üretim kuralına göre hesaplanır (FLOOR). Kaydedilen NET doğrulanmış
-                  master data olarak saklanır.
+                  Önerilen NET kesim hesabından gelir. Farklı bir değer kaydedebilirsiniz.
                 </p>
               )}
 
@@ -603,7 +644,7 @@ export function ProductionYieldsPage() {
             aria-label="NET güncelle"
           >
             <header className="rm-drawer-header">
-              <h2>NET Güncelle</h2>
+              <h2>NET Adedi Güncelle</h2>
               <button type="button" className="rm-link" onClick={closeDrawer}>
                 Kapat
               </button>
@@ -611,6 +652,16 @@ export function ProductionYieldsPage() {
 
             <form className="rm-form" onSubmit={(e) => void onSubmitReplace(e)}>
               {formError ? <div className="rm-alert rm-alert-error">{formError}</div> : null}
+
+              <div className="rm-summary">
+                <div className="rm-summary-label">Ürün Grubu</div>
+                <div className="rm-summary-value">{formatUsageGroup(selected)}</div>
+              </div>
+
+              <div className="rm-summary">
+                <div className="rm-summary-label">Ürün</div>
+                <div className="rm-summary-value">{formatUsageProduct(selected)}</div>
+              </div>
 
               <div className="rm-summary">
                 <div className="rm-summary-label">Ham Madde</div>
@@ -655,7 +706,7 @@ export function ProductionYieldsPage() {
               </label>
 
               <p className="rm-hint">
-                Eski NET kaydı silinmez; pasife alınır ve yeni aktif kayıt oluşturulur.
+                Eski NET silinmez; yeni değer kayda geçilir.
               </p>
 
               <div className="rm-form-actions">

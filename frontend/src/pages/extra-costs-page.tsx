@@ -142,7 +142,7 @@ export function ExtraCostsPage() {
         {loading && !data ? (
           <p className="ec-empty">Yükleniyor…</p>
         ) : !data || data.items.length === 0 ? (
-          <p className="ec-empty">Ek maliyet kaydı bulunamadı. Seed çalıştırılmış olmalı.</p>
+          <p className="ec-empty">Ek maliyet kaydı bulunamadı.</p>
         ) : (
           <table className="ec-table">
             <thead>
@@ -227,7 +227,7 @@ export function ExtraCostsPage() {
               </label>
 
               <p className="ec-hint">
-                Eski değer silinmez; dönem kapanır ve yeni kayıt açılır.
+                Eski değer silinmez; yeni değer bu tarihten itibaren geçerli olur.
               </p>
 
               {formError ? <div className="ec-alert ec-alert-error">{formError}</div> : null}
