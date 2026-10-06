@@ -25,7 +25,7 @@ export function listCitaPublishedPriceBands() {
 
 export function updateCitaPublishedPriceBand(
   id: string,
-  input: { cashPrice: string; cardPrice: string },
+  input: { cashPrice: string; cardPrice?: string },
 ) {
   return apiRequest<CitaPublishedPriceBandsResponse>(
     `/cita-published-price-bands/${encodeURIComponent(id)}`,

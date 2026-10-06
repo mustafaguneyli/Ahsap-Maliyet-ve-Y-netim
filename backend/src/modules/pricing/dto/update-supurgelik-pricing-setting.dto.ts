@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { IsIn, IsNotEmpty, Matches } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, Matches } from 'class-validator';
 
 /** SUPURGELIK group-scope normal baz fiyat kâr oranı. */
 export class UpdateSupurgelikPricingSettingDto {
@@ -18,4 +18,13 @@ export class UpdateSupurgelikPricingSettingDto {
     typeof value === 'string' ? value.trim().replace(',', '.') : value,
   )
   profitRate!: string;
+
+  @IsOptional()
+  @Matches(/^\d+(\.\d{1,4})?$/, {
+    message: 'Kart / taksit farkı geçerli bir Decimal olmalıdır (örn. 20 veya 18.5).',
+  })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().replace(',', '.') : value,
+  )
+  cardMarkupRate?: string;
 }

@@ -83,13 +83,40 @@ describe('CostCalculationService fiyat yayılımı', () => {
     profitRate: string | null = '20',
     cardMarkupRate: string | null = '20',
     cashOverrides: Array<{ widthMm: number; lengthMm: number; cashPrice: string }> = [],
+    sizeProfitOverrides: Array<{
+      widthMm: number;
+      lengthMm: number;
+      profitRate: string;
+    }> = [],
   ) {
+    const productSetting =
+      vatRate == null
+        ? null
+        : {
+            id: 'ps-34',
+            productId: 'p34',
+            productGroupId: null,
+            vatRate: { toString: () => vatRate },
+            profitRate: profitRate == null ? null : { toString: () => profitRate },
+            cardMarkupRate:
+              cardMarkupRate == null ? null : { toString: () => cardMarkupRate },
+            isActive: true,
+          };
+    const sizeRows = (
+      sizeProfitOverrides.length > 0 ? sizeProfitOverrides : cashOverrides
+    ).map((row, index) => ({
+      id: `sz-${index}`,
+      widthMm: row.widthMm,
+      lengthMm: row.lengthMm,
+    }));
     const prisma = {
       rawMaterial: {
         findMany: jest.fn().mockResolvedValue(materials),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       productionYield: {
         findMany: jest.fn(),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
       productGroup: {
         findUnique: jest.fn().mockResolvedValue({
@@ -106,29 +133,22 @@ describe('CostCalculationService fiyat yayılımı', () => {
         }),
       },
       pricingSetting: {
-        findFirst: jest.fn().mockResolvedValue(
-          vatRate == null
-            ? null
-            : {
-                id: 'ps-34',
-                productId: 'p34',
-                productGroupId: null,
-                vatRate: { toString: () => vatRate },
-                profitRate: profitRate == null ? null : { toString: () => profitRate },
-                cardMarkupRate:
-                  cardMarkupRate == null ? null : { toString: () => cardMarkupRate },
-                isActive: true,
-              },
+        findFirst: jest.fn().mockResolvedValue(productSetting),
+        findMany: jest.fn().mockImplementation(
+          ({
+            where,
+          }: {
+            where: { productId?: string | null; productGroupId?: string | null };
+          }) => {
+            if (where.productId === 'p34') {
+              return Promise.resolve(productSetting ? [productSetting] : []);
+            }
+            return Promise.resolve([]);
+          },
         ),
       },
       productSize: {
-        findMany: jest.fn().mockResolvedValue(
-          cashOverrides.map((o, i) => ({
-            id: `sz-${i}`,
-            widthMm: o.widthMm,
-            lengthMm: o.lengthMm,
-          })),
-        ),
+        findMany: jest.fn().mockResolvedValue(sizeRows),
       },
       priceOverride: {
         findMany: jest.fn().mockResolvedValue(
@@ -139,6 +159,19 @@ describe('CostCalculationService fiyat yayılımı', () => {
             cashPrice: { toString: () => o.cashPrice },
             reason: '2026-4',
             isActive: true,
+          })),
+        ),
+      },
+      productPricingOverride: {
+        findMany: jest.fn().mockResolvedValue(
+          sizeProfitOverrides.map((row, index) => ({
+            id: `po-${index}`,
+            productId: 'p34',
+            productSizeId: `sz-${index}`,
+            profitRate: { toString: () => row.profitRate },
+            isActive: true,
+            effectiveFrom: now,
+            effectiveTo: null,
           })),
         ),
       },
@@ -340,6 +373,40 @@ describe('CostCalculationService fiyat yayılımı', () => {
     ).toBe(true);
   });
 
+  it('A/B) aynı üründe 10×210 %20 ve 12×210 %30 ayrı kâr/satış üretir', async () => {
+    const result = await buildService(
+      [material22, material12, material12_220],
+      extraCostsList(),
+      '0',
+      '15',
+      '20',
+      [],
+      [
+        { widthMm: 100, lengthMm: 2100, profitRate: '20' },
+        { widthMm: 120, lengthMm: 2100, profitRate: '30' },
+      ],
+    ).getDoorFrameMdfCosts('34_MM', now);
+    const ten = result.rows.find((r) => r.displayName === '10×210')!;
+    const twelve = result.rows.find((r) => r.displayName === '12×210')!;
+    expect(ten.pricing.profitRate).toBe('20');
+    expect(twelve.pricing.profitRate).toBe('30');
+    expect(ten.pricing.profitRateSource).toBe('SIZE_OVERRIDE');
+    expect(twelve.pricing.profitRateSource).toBe('SIZE_OVERRIDE');
+    expect(
+      toDecimal(ten.pricing.profitAmount)
+        .minus(toDecimal(ten.pricing.costWithVat).times('20').div('100'))
+        .abs()
+        .isZero(),
+    ).toBe(true);
+    expect(
+      toDecimal(twelve.pricing.profitAmount)
+        .minus(toDecimal(twelve.pricing.costWithVat).times('30').div('100'))
+        .abs()
+        .isZero(),
+    ).toBe(true);
+    expect(ten.pricing.priceBeforeRounding).not.toBe(twelve.pricing.priceBeforeRounding);
+  });
+
   it('profitRate 20→25 olunca priceBeforeRounding değişir, satır UPDATE edilmez', async () => {
     const materials = [material22, material12, material12_220];
     const twenty = await buildService(materials, extraCostsList(), '0', '20').getDoorFrameMdfCosts(
@@ -373,16 +440,20 @@ describe('CostCalculationService fiyat yayılımı', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('cardMarkupRate yoksa sessiz varsayım yapmaz', async () => {
-    await expect(
-      buildService(
-        [material22, material12, material12_220],
-        extraCostsList(),
-        '0',
-        '20',
-        null,
-      ).getDoorFrameMdfCosts('34_MM', now),
-    ).rejects.toBeInstanceOf(NotFoundException);
+  it('cardMarkupRate yoksa nakit durur, kart null olur; 0 uydurulmaz', async () => {
+    const result = await buildService(
+      [material22, material12, material12_220],
+      extraCostsList(),
+      '0',
+      '20',
+      null,
+    ).getDoorFrameMdfCosts('34_MM', now);
+    const row = result.rows.find((r) => r.displayName === '10×210')!;
+    expect(row.pricing.cashSalePrice).toBeTruthy();
+    expect(row.pricing.publishedCashPrice).toBe(row.pricing.cashSalePrice);
+    expect(row.pricing.publishedCardPrice).toBeNull();
+    expect(row.pricing.cardSalePrice).toBeNull();
+    expect(result.cardMarkupRate).toBeNull();
   });
 
   it('cardMarkupRate 20→25 olunca nakit aynı, kart fiyatı değişir', async () => {
@@ -443,6 +514,228 @@ describe('CostCalculationService fiyat yayılımı', () => {
     expect(row.pricing.cashOverride?.cashPrice).toBe('300');
     const noOverride = result.rows.find((r) => r.displayName === '12×210')!;
     expect(noOverride.pricing.publishedCashPrice).toBe(noOverride.pricing.calculatedCashPrice);
+  });
+
+  it('iki MDF parçası aynı seçili alış türünü kullanır; eksik tür diğerine düşmez', async () => {
+    const both = (
+      material: typeof material22,
+      cash: string,
+      card: string,
+    ) => ({
+      ...material,
+      prices: [
+        {
+          id: `${material.id}-cash`,
+          priceType: MaterialPriceType.CASH,
+          price: { toString: () => cash },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+        {
+          id: `${material.id}-card`,
+          priceType: MaterialPriceType.CARD_INSTALLMENT,
+          price: { toString: () => card },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+      ],
+    });
+    const materials = [
+      both(material22, '2000', '2500'),
+      both(material12, '2000', '2500'),
+      both(material12_220, '1800', '2500'),
+    ];
+    const service = buildService(materials);
+    const cash = await service.getDoorFrameMdfCosts('34_MM', now, 'CASH');
+    const card = await service.getDoorFrameMdfCosts('34_MM', now);
+
+    const cashRow = cash.rows.find((row) => row.displayName === '10×210')!;
+    const cardRow = card.rows.find((row) => row.displayName === '10×210')!;
+    const wide = cash.rows.find((row) => row.displayName === '14×220')!;
+
+    expect(cash.materialPriceType).toBe('CASH');
+    expect(card.priceType).toBe(MaterialPriceType.CARD_INSTALLMENT);
+    expect(cashRow.parts.map((part) => part.sheetPrice)).toEqual(['2000', '2000']);
+    expect(cashRow.parts.map((part) => part.rawMaterialCode)).toEqual([
+      'MDF-22-2100X2800-ZIMPARALI',
+      'MDF-12-2100X2800-ZIMPARALI',
+    ]);
+    expect(cardRow.parts.every((part) => part.sheetPrice === '2500')).toBe(true);
+    expect(wide.parts.map((part) => part.rawMaterialCode)).toEqual([
+      'MDF-22-2100X2800-ZIMPARALI',
+      'MDF-12-2200X2800-ZIMPARALI',
+    ]);
+    expect(wide.parts.map((part) => part.sheetPrice)).toEqual(['2000', '1800']);
+    expect(cashRow.parts.map((part) => part.netQty)).toEqual(
+      cardRow.parts.map((part) => part.netQty),
+    );
+    expect(cashRow.extraCosts).toEqual(cardRow.extraCosts);
+
+    const missingCash = buildService([
+      both(material22, '2000', '2500'),
+      { ...both(material12, '2000', '2500'), prices: both(material12, '2000', '2500').prices.filter((price) => price.priceType === MaterialPriceType.CARD_INSTALLMENT) },
+      both(material12_220, '1800', '2500'),
+    ]);
+    await expect(missingCash.getDoorFrameMdfCosts('34_MM', now, 'CASH')).rejects.toThrow(
+      'MDF-12-2100X2800-ZIMPARALI için şu an geçerli CASH alış fiyatı bulunamadı.',
+    );
+  });
+
+  it('12 mm planlanmış nakit fiyatı geçiş anında değişir, kart fiyatı aynı kalır', async () => {
+    const twelve = {
+      ...material12,
+      prices: [
+        {
+          id: 'cash-1885-closed',
+          priceType: MaterialPriceType.CASH,
+          price: { toString: () => '1885' },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: new Date('2026-09-04T00:00:00.000Z'),
+          isActive: true,
+        },
+        {
+          id: 'cash-2000',
+          priceType: MaterialPriceType.CASH,
+          price: { toString: () => '2000' },
+          effectiveFrom: new Date('2026-09-04T00:00:00.000Z'),
+          effectiveTo: new Date('2026-10-04T00:00:00.000Z'),
+          isActive: true,
+        },
+        {
+          id: 'cash-1885-open',
+          priceType: MaterialPriceType.CASH,
+          price: { toString: () => '1885' },
+          effectiveFrom: new Date('2026-10-04T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+        {
+          id: 'card-2185',
+          priceType: MaterialPriceType.CARD_INSTALLMENT,
+          price: { toString: () => '2185' },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+      ],
+    };
+    const priced = (
+      material: typeof material22,
+      cash: string,
+      card: string,
+    ) => ({
+      ...material,
+      prices: [
+        {
+          id: `${material.id}-cash`,
+          priceType: MaterialPriceType.CASH,
+          price: { toString: () => cash },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+        {
+          id: `${material.id}-card`,
+          priceType: MaterialPriceType.CARD_INSTALLMENT,
+          price: { toString: () => card },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+      ],
+    });
+    const service = buildService([
+      priced(material22, '3750', '4400'),
+      twelve,
+      priced(material12_220, '2100', '2475'),
+    ]);
+    const sheet = async (
+      instant: string,
+      priceType?: 'CASH',
+    ) => {
+      const result = await service.getDoorFrameMdfCosts(
+        '34_MM',
+        new Date(instant),
+        priceType,
+      );
+      return result.rows
+        .find((row) => row.displayName === '10×210')!
+        .parts.find((part) => part.thicknessMm === '12')!.sheetPrice;
+    };
+
+    expect(await sheet('2026-10-03T23:59:59.999Z', 'CASH')).toBe('2000');
+    expect(await sheet('2026-10-04T00:00:00.000Z', 'CASH')).toBe('1885');
+    expect(await sheet('2026-10-04T00:00:00.001Z', 'CASH')).toBe('1885');
+    expect(await sheet('2026-10-03T23:59:59.999Z')).toBe('2185');
+    expect(await sheet('2026-10-04T00:00:00.000Z')).toBe('2185');
+    expect(await sheet('2026-10-04T00:00:00.001Z')).toBe('2185');
+  });
+
+  it('yalnız değişen alış türünün tabaka fiyatını günceller', async () => {
+    const priced = (
+      material: typeof material22,
+      cash: string,
+      card: string,
+    ) => ({
+      ...material,
+      prices: [
+        {
+          id: `${material.id}-cash`,
+          priceType: MaterialPriceType.CASH,
+          price: { toString: () => cash },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+        {
+          id: `${material.id}-card`,
+          priceType: MaterialPriceType.CARD_INSTALLMENT,
+          price: { toString: () => card },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+      ],
+    });
+    const load = (cash12: string, card12: string) =>
+      buildService([
+        priced(material22, '3750', '4400'),
+        priced(material12, cash12, card12),
+        priced(material12_220, '2100', '2475'),
+      ]);
+    const quote = async (
+      service: CostCalculationService,
+      priceType?: 'CASH',
+    ) => service.getDoorFrameMdfCosts('34_MM', now, priceType);
+    const sheet12 = (
+      result: Awaited<ReturnType<CostCalculationService['getDoorFrameMdfCosts']>>,
+    ) =>
+      result.rows
+        .find((row) => row.displayName === '10×210')!
+        .parts.find((part) => part.thicknessMm === '12')!.sheetPrice;
+
+    const baseCash = await quote(load('2000', '2185'), 'CASH');
+    const raisedCash = await quote(load('2100', '2185'), 'CASH');
+    const baseCard = await quote(load('2000', '2185'));
+    const raisedCard = await quote(load('2000', '2300'));
+
+    expect(sheet12(baseCash)).toBe('2000');
+    expect(sheet12(raisedCash)).toBe('2100');
+    expect(sheet12(baseCard)).toBe('2185');
+    expect(sheet12(raisedCard)).toBe('2300');
+    expect(sheet12(await quote(load('2100', '2185')))).toBe('2185');
+    expect(sheet12(await quote(load('2000', '2300'), 'CASH'))).toBe('2000');
+    const baseRow = baseCash.rows.find((row) => row.displayName === '10×210')!;
+    const raisedRow = raisedCash.rows.find((row) => row.displayName === '10×210')!;
+    expect(baseRow.parts.map((part) => part.netQty)).toEqual(
+      raisedRow.parts.map((part) => part.netQty),
+    );
+    expect(baseCash.extraCosts).toEqual(raisedCash.extraCosts);
+    expect(baseCard.extraCosts).toEqual(raisedCard.extraCosts);
+    expect(baseCash.profitRate).toBe(raisedCard.profitRate);
+    expect(baseCash.cardMarkupRate).toBe(raisedCard.cardMarkupRate);
   });
 });
 

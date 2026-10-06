@@ -3,6 +3,16 @@ import { toDecimal } from '../../common/decimal/decimal.util';
 import type { CitaNetSource } from './cita-net-calculator';
 import { CITA_NET_PRODUCT_CODE } from './cita-net-calculator';
 
+export const CITA_MATERIAL_PRICE_TYPES = ['CASH', 'CARD_INSTALLMENT'] as const;
+
+export type CitaMaterialPriceType = (typeof CITA_MATERIAL_PRICE_TYPES)[number];
+
+export function isCitaMaterialPriceType(
+  value: string,
+): value is CitaMaterialPriceType {
+  return (CITA_MATERIAL_PRICE_TYPES as readonly string[]).includes(value);
+}
+
 export type CitaMdfInput = {
   productCode: typeof CITA_NET_PRODUCT_CODE;
   thicknessMm: string;
@@ -24,7 +34,7 @@ export type CitaMdfInput = {
     source: CitaNetSource;
   };
   sheetPrice: {
-    priceType: 'CARD_INSTALLMENT';
+    priceType: CitaMaterialPriceType;
     amount: string;
   };
 };
@@ -37,24 +47,26 @@ export type CitaMdfResult = {
   rawMaterial: CitaMdfInput['rawMaterial'];
   cut: CitaMdfInput['cut'];
   productionYield: CitaMdfInput['productionYield'];
+  /** Seçilen MDF alış türü. Satış kart yüzdesinden ayrıdır. */
+  materialPriceType: CitaMaterialPriceType;
   sheetPrice: {
-    priceType: 'CARD_INSTALLMENT';
+    priceType: CitaMaterialPriceType;
     amount: string;
   };
   mdfUnitCost: string;
 };
 
 /**
- * Çıta temel MDF maliyeti: activeSheetPrice / netQty.
- * Ara yuvarlama yok. ExtraCost / productionCost / kâr bu fazda yok.
+ * Çıta temel MDF maliyeti: seçilen tabaka alış fiyatı / netQty.
+ * CASH ve CARD_INSTALLMENT aynı formülü kullanır. Ara yuvarlama yok.
  */
 export function calculateCitaMdfCost(input: CitaMdfInput): CitaMdfResult {
   if (input.productCode !== CITA_NET_PRODUCT_CODE) {
     throw new BadRequestException('Çıta MDF maliyeti yalnız CITA ürünü için hesaplanır.');
   }
-  if (input.sheetPrice.priceType !== 'CARD_INSTALLMENT') {
+  if (!isCitaMaterialPriceType(input.sheetPrice.priceType)) {
     throw new BadRequestException(
-      'Çıta MDF maliyeti yalnız CARD_INSTALLMENT alış fiyatı ile hesaplanır.',
+      'Çıta MDF alış türü CASH veya CARD_INSTALLMENT olmalıdır.',
     );
   }
 
@@ -83,8 +95,9 @@ export function calculateCitaMdfCost(input: CitaMdfInput): CitaMdfResult {
       netQty,
       source: input.productionYield.source,
     },
+    materialPriceType: input.sheetPrice.priceType,
     sheetPrice: {
-      priceType: 'CARD_INSTALLMENT',
+      priceType: input.sheetPrice.priceType,
       amount: sheetPrice.toFixed(),
     },
     mdfUnitCost: mdfUnitCost.toFixed(),

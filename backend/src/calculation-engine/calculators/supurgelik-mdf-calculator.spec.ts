@@ -115,12 +115,18 @@ describe('SupurgelikMdfCalculator', () => {
         productionYield: { netQty: 0, scope: 'GENERIC' },
       }),
     ).toThrow(BadRequestException);
+    const cash = calculator.calculate({
+      ...input,
+      sheetPrice: { priceType: 'CASH', amount: '2185' },
+    });
+    expect(cash.mdfUnitCost).toBe(calculator.calculate(input).mdfUnitCost);
+    expect(cash.sheetPrice.priceType).toBe('CASH');
     expect(() =>
       calculator.calculate({
         ...input,
-        sheetPrice: { priceType: 'CASH' as 'CARD_INSTALLMENT', amount: '2185' },
+        sheetPrice: { priceType: 'PEŞİN' as 'CASH', amount: '2185' },
       }),
-    ).toThrow('CARD_INSTALLMENT');
+    ).toThrow('CASH veya CARD_INSTALLMENT');
     expect(() =>
       calculator.calculate({
         ...input,

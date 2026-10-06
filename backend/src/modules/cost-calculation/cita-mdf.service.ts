@@ -1,11 +1,31 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { MaterialPriceType } from '@prisma/client';
-import { calculateCitaMdfCost } from '../../calculation-engine/calculators/cita-mdf-calculator';
+import {
+  calculateCitaMdfCost,
+  isCitaMaterialPriceType,
+  type CitaMaterialPriceType,
+} from '../../calculation-engine/calculators/cita-mdf-calculator';
 import { CitaNetService } from './cita-net.service';
 import { CitaRawMaterialPriceMissingException } from './cita-mdf.errors';
 import { selectCurrentMaterialPrice } from './current-material-price';
 import type { CitaNetQueryDto } from './dto/cita-net-query.dto';
 import { PrismaService } from '../../prisma/prisma.service';
+
+/** Parametre yoksa mevcut kart alış davranışı korunur. Diğer türe düşülmez. */
+export function resolveCitaMaterialPriceType(
+  value?: string | null,
+): CitaMaterialPriceType {
+  if (value == null || value.trim() === '') {
+    return 'CARD_INSTALLMENT';
+  }
+  const normalized = value.trim();
+  if (!isCitaMaterialPriceType(normalized)) {
+    throw new BadRequestException(
+      'materialPriceType CASH veya CARD_INSTALLMENT olmalıdır.',
+    );
+  }
+  return normalized;
+}
 
 @Injectable()
 export class CitaMdfService {
@@ -15,10 +35,12 @@ export class CitaMdfService {
   ) {}
 
   /**
-   * NET resolver'ı reuse eder; üzerine yalnız aktif CARD_INSTALLMENT / netQty ekler.
+   * NET resolver'ı reuse eder; seçilen aktif alış fiyatını / netQty ekler.
+   * materialPriceType yoksa CARD_INSTALLMENT. Diğer türe düşülmez.
    * Custom ölçü ve fiyat değişimi DB master'ına yazılmaz.
    */
   async getMdfCost(query: CitaNetQueryDto, now: Date = new Date()) {
+    const materialPriceType = resolveCitaMaterialPriceType(query.materialPriceType);
     const net = await this.citaNetService.resolveNet(query);
 
     const material = await this.prisma.rawMaterial.findUnique({
@@ -26,7 +48,7 @@ export class CitaMdfService {
       include: {
         prices: {
           where: {
-            priceType: MaterialPriceType.CARD_INSTALLMENT,
+            priceType: materialPriceType as MaterialPriceType,
             isActive: true,
           },
           orderBy: { effectiveFrom: 'desc' },
@@ -41,11 +63,14 @@ export class CitaMdfService {
 
     const currentPrice = selectCurrentMaterialPrice(
       material.prices,
-      MaterialPriceType.CARD_INSTALLMENT,
+      materialPriceType as MaterialPriceType,
       now,
     );
     if (!currentPrice) {
-      throw new CitaRawMaterialPriceMissingException(material.code);
+      throw new CitaRawMaterialPriceMissingException(
+        material.code,
+        materialPriceType,
+      );
     }
 
     return calculateCitaMdfCost({
@@ -69,7 +94,7 @@ export class CitaMdfService {
         source: net.source,
       },
       sheetPrice: {
-        priceType: 'CARD_INSTALLMENT',
+        priceType: materialPriceType,
         amount: currentPrice.price.toString(),
       },
     });

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import {
   CitaPublishedPriceBandItem,
   listCitaPublishedPriceBands,
@@ -20,8 +20,21 @@ import {
 import {
   listRawMaterials,
   RawMaterial,
-  updateRawMaterialCardInstallmentPrice,
 } from '../api/raw-materials-api';
+import { saveChangedPurchasePrices } from '../lib/material-purchase-prices';
+import {
+  friendlyMaterialPriceError,
+  materialPriceTypeLabel,
+  missingPurchasePriceLabel,
+  salePriceResultLabel,
+  showsCardSalePrice,
+  showsCashSalePrice,
+  type MaterialPriceType,
+} from '../lib/material-price-type';
+import {
+  getCitaPricingSetting,
+  updateCitaPricingSetting,
+} from '../api/pricing-settings-api';
 import { ApiError } from '../lib/api';
 import {
   cmInputToMmString,
@@ -29,12 +42,13 @@ import {
   formatSheetSizeCm,
 } from '../lib/length';
 import { formatTryTwoDecimals } from '../lib/money';
+import { ProfitRateCell } from './profit-rate-cell';
 
 const CITA_EXTRA_COST_CODES = ['CUTTING', 'LABOR'] as const;
 type CitaExtraCostCode = (typeof CITA_EXTRA_COST_CODES)[number];
 
 const EXTRA_COST_LABELS: Record<CitaExtraCostCode, string> = {
-  CUTTING: 'Kesim',
+  CUTTING: 'Kesim Maliyeti (250 Parça)',
   LABOR: 'İşçilik',
 };
 
@@ -63,6 +77,11 @@ function isPositiveDecimalInput(value: string): boolean {
   return /^\d+(\.\d{1,4})?$/.test(normalized) && !/^0+(\.0+)?$/.test(normalized);
 }
 
+function isNonNegativeDecimalInput(value: string): boolean {
+  const normalized = normalizeDecimalInput(value);
+  return /^\d+(\.\d{1,4})?$/.test(normalized);
+}
+
 function formatThicknessGroupLabel(thicknessMm: string): string {
   const normalized = thicknessMm.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
   return `${normalized} MM`;
@@ -70,6 +89,10 @@ function formatThicknessGroupLabel(thicknessMm: string): string {
 
 function extraAmount(row: CitaCostRow, code: CitaExtraCostCode): string | null {
   return row.extraCosts.find((item) => item.code === code)?.amount ?? null;
+}
+
+function cuttingUnitAmount(row: CitaCostRow): string | null {
+  return row.cuttingUnitCost ?? null;
 }
 
 /** Backend publishedCash/Card değerini aynen okur; frontend hesap yapmaz. */
@@ -90,9 +113,18 @@ function isPublishedPriceMissing(row: CitaCostRow): boolean {
   return row.pricing?.statusCode === 'CITA_PUBLISHED_PRICE_MISSING';
 }
 
-function statusLabel(row: CitaCostRow): string | null {
+function statusLabel(
+  row: CitaCostRow,
+  materialPriceType: MaterialPriceType,
+): string | null {
   if (row.statusCode === 'RAW_MATERIAL_PRICE_MISSING') {
-    return 'MDF fiyatı eksik';
+    return missingPurchasePriceLabel(
+      `${row.thicknessMm} mm ${formatSheetSizeCm(
+        row.rawMaterial.sheetWidthMm,
+        row.rawMaterial.sheetLengthMm,
+      )} MDF`,
+      row.materialPriceType ?? materialPriceType,
+    );
   }
   if (row.statusCode !== 'EXTRA_COST_MISSING') {
     return null;
@@ -108,7 +140,7 @@ function statusLabel(row: CitaCostRow): string | null {
 }
 
 function customSourceLabel(source: CitaCostRow['productionYield']['source']): string {
-  return source === 'CALCULATED_CUT_RULE' ? 'Özel Kesim Hesabı' : 'Master';
+  return source === 'CALCULATED_CUT_RULE' ? 'Özel Kesim Hesabı' : 'Kayıtlı';
 }
 
 function validateWidthCm(raw: string): string | null {
@@ -192,8 +224,14 @@ function MoneyCell({
   return <span className={`cc-badge cc-badge-${badge}`}>{formatted}</span>;
 }
 
-function StatusCell({ row }: { row: CitaCostRow }) {
-  const costLabel = statusLabel(row);
+function StatusCell({
+  row,
+  materialPriceType,
+}: {
+  row: CitaCostRow;
+  materialPriceType: MaterialPriceType;
+}) {
+  const costLabel = statusLabel(row, materialPriceType);
   const priceMissing = isPublishedPriceMissing(row);
   if (!costLabel && !priceMissing) {
     return <span className="cc-supurgelik-no-status">—</span>;
@@ -220,8 +258,19 @@ function StatusCell({ row }: { row: CitaCostRow }) {
   );
 }
 
-function CitaRowsTable({ rows }: { rows: CitaCostRow[] }) {
+function CitaRowsTable({
+  rows,
+  materialPriceType,
+  onProfitSaved,
+}: {
+  rows: CitaCostRow[];
+  materialPriceType: MaterialPriceType;
+  onProfitSaved?: (message: string) => void;
+}) {
   const groups = groupCitaRows(rows);
+  const showCash = showsCashSalePrice(materialPriceType);
+  const showCard = showsCardSalePrice(materialPriceType);
+  const colCount = 11 + (showCash ? 1 : 0) + (showCard ? 1 : 0) + 1;
 
   return (
     <table className="cc-table cc-cita-table">
@@ -236,14 +285,20 @@ function CitaRowsTable({ rows }: { rows: CitaCostRow[] }) {
           <th>Kesim</th>
           <th>İşçilik</th>
           <th>Üretim Maliyeti</th>
-          <th className="cc-col-sale">Nakit Satış</th>
-          <th className="cc-col-sale">Kart / Taksit</th>
+          <th>Kâr %</th>
+          <th className="cc-col-sale">{salePriceResultLabel(materialPriceType)}</th>
           <th>Durum</th>
         </tr>
       </thead>
       <tbody>
         {groups.map((group) => (
-          <CitaThicknessGroup key={group.thicknessMm} group={group} />
+          <CitaThicknessGroup
+            key={group.thicknessMm}
+            group={group}
+            materialPriceType={materialPriceType}
+            colCount={colCount}
+            onProfitSaved={onProfitSaved}
+          />
         ))}
       </tbody>
     </table>
@@ -252,13 +307,22 @@ function CitaRowsTable({ rows }: { rows: CitaCostRow[] }) {
 
 function CitaThicknessGroup({
   group,
+  materialPriceType,
+  colCount,
+  onProfitSaved,
 }: {
   group: { thicknessMm: string; label: string; rows: CitaCostRow[] };
+  materialPriceType: MaterialPriceType;
+  colCount: number;
+  onProfitSaved?: (message: string) => void;
 }) {
+  const showCash = showsCashSalePrice(materialPriceType);
+  const showCard = showsCardSalePrice(materialPriceType);
+
   return (
     <>
       <tr className="cc-cita-group-heading">
-        <td colSpan={12}>{group.label}</td>
+        <td colSpan={colCount}>{group.label}</td>
       </tr>
       {group.rows.map((row) => (
         <tr key={`${row.thicknessMm}-${row.widthMm}-${row.lengthMm}`}>
@@ -271,7 +335,7 @@ function CitaThicknessGroup({
           <td className="cc-qty">{row.productionYield.netQty}</td>
           <td>
             {row.productionYield.source === 'MASTER' ? (
-              <span className="cc-cita-source-badge">Master</span>
+              <span className="cc-cita-source-badge">Kayıtlı</span>
             ) : (
               '—'
             )}
@@ -283,7 +347,7 @@ function CitaThicknessGroup({
             <MoneyCell value={row.mdfUnitCost} badge="mdf" />
           </td>
           <td className="cc-money">
-            <MoneyCell value={extraAmount(row, 'CUTTING')} badge="expense" />
+            <MoneyCell value={cuttingUnitAmount(row)} badge="expense" />
           </td>
           <td className="cc-money">
             <MoneyCell value={extraAmount(row, 'LABOR')} badge="expense" />
@@ -291,14 +355,31 @@ function CitaThicknessGroup({
           <td className="cc-money">
             <MoneyCell value={row.productionCost} badge="prod" />
           </td>
-          <td className="cc-money">
-            <MoneyCell value={publishedPriceAmount(row, 'publishedCashPrice')} />
+          <td className="cc-qty">
+            <ProfitRateCell
+              value={row.pricing?.profitRate}
+              payload={{
+                productGroupCode: 'CITA',
+                productCode: 'CITA',
+                widthMm: Number(row.widthMm),
+                lengthMm: Number(row.lengthMm),
+              }}
+              onSaved={onProfitSaved}
+            />
           </td>
           <td className="cc-money">
-            <MoneyCell value={publishedPriceAmount(row, 'publishedCardPrice')} />
+            {showCash ? (
+              <MoneyCell value={publishedPriceAmount(row, 'publishedCashPrice')} />
+            ) : showCard ? (
+              publishedPriceAmount(row, 'publishedCardPrice') != null ? (
+                <MoneyCell value={publishedPriceAmount(row, 'publishedCardPrice')} />
+              ) : (
+                row.pricing?.cardStatusMessage ?? 'Kart/taksit oranı tanımlı değil'
+              )
+            ) : null}
           </td>
           <td className="cc-supurgelik-status-cell">
-            <StatusCell row={row} />
+            <StatusCell row={row} materialPriceType={materialPriceType} />
           </td>
         </tr>
       ))}
@@ -306,7 +387,17 @@ function CitaThicknessGroup({
   );
 }
 
-export function CitaCostList() {
+export function CitaCostList({
+  materialPriceType,
+  initialSourceDrawer = false,
+  onSourcesChanged,
+  refreshToken = 0,
+}: {
+  materialPriceType: MaterialPriceType;
+  initialSourceDrawer?: boolean;
+  onSourcesChanged?: () => void;
+  refreshToken?: number;
+}) {
   const [data, setData] = useState<CitaCostListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -330,6 +421,7 @@ export function CitaCostList() {
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceNotice, setSourceNotice] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
+  const [mdfCashInput, setMdfCashInput] = useState('');
   const [priceInput, setPriceInput] = useState('');
   const [sourceSaving, setSourceSaving] = useState(false);
   const [sourceExtraCosts, setSourceExtraCosts] = useState<ExtraCostItem[]>([]);
@@ -350,25 +442,37 @@ export function CitaCostList() {
   );
   const [editingPriceBandId, setEditingPriceBandId] = useState<string | null>(null);
   const [cashPriceInput, setCashPriceInput] = useState('');
-  const [cardPriceInput, setCardPriceInput] = useState('');
   const [priceBandSaving, setPriceBandSaving] = useState(false);
-  const sourceBusy = sourceSaving || extraCostSaving || priceBandSaving;
+  const [cardMarkupRate, setCardMarkupRate] = useState<string | null>(null);
+  const [cardMarkupRateInput, setCardMarkupRateInput] = useState('');
+  const [editingCardMarkupRate, setEditingCardMarkupRate] = useState(false);
+  const [cardMarkupRateSaving, setCardMarkupRateSaving] = useState(false);
+  const [cardMarkupRateError, setCardMarkupRateError] = useState<string | null>(
+    null,
+  );
+  const sourceBusy =
+    sourceSaving || extraCostSaving || priceBandSaving || cardMarkupRateSaving;
+  const customRequestId = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setData(null);
 
-    void fetchCitaCostList()
+    void fetchCitaCostList(materialPriceType)
       .then((response) => {
         if (!cancelled) setData(response);
       })
       .catch((requestError) => {
         if (cancelled) return;
+        setData(null);
         setError(
-          requestError instanceof ApiError
-            ? requestError.message
-            : 'Çıta maliyetleri yüklenemedi.',
+          friendlyMaterialPriceError(
+            requestError instanceof ApiError
+              ? requestError.message
+              : 'Çıta maliyetleri yüklenemedi.',
+          ),
         );
       })
       .finally(() => {
@@ -378,7 +482,7 @@ export function CitaCostList() {
     return () => {
       cancelled = true;
     };
-  }, [requestVersion]);
+  }, [requestVersion, materialPriceType, refreshToken]);
 
   const loadSourceMaterials = async (
     costData: CitaCostListResponse | null = data,
@@ -424,6 +528,55 @@ export function CitaCostList() {
     }
   };
 
+  const loadCitaCardMarkupRate = async () => {
+    setCardMarkupRateError(null);
+    try {
+      const setting = await getCitaPricingSetting();
+      setCardMarkupRate(setting.cardMarkupRate);
+    } catch (requestError) {
+      setCardMarkupRate(null);
+      setCardMarkupRateError(
+        requestError instanceof ApiError
+          ? requestError.message
+          : 'Kart / taksit oranı yüklenemedi.',
+      );
+    }
+  };
+
+  const saveCitaCardMarkupRate = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!isNonNegativeDecimalInput(cardMarkupRateInput)) {
+      setCardMarkupRateError(
+        'Kart / taksit farkı 0 veya daha büyük geçerli bir değer olmalıdır (örn. 20).',
+      );
+      return;
+    }
+    setCardMarkupRateSaving(true);
+    setCardMarkupRateError(null);
+    try {
+      const result = await updateCitaPricingSetting(
+        normalizeDecimalInput(cardMarkupRateInput),
+      );
+      setCardMarkupRate(result.cardMarkupRate);
+      setEditingCardMarkupRate(false);
+      setCardMarkupRateInput('');
+      setSourceNotice('Kart / taksit oranı kaydedildi.');
+      setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
+      if (customQuery) {
+        await refetchCustomResult(customQuery);
+      }
+    } catch (requestError) {
+      setCardMarkupRateError(
+        requestError instanceof ApiError
+          ? requestError.message
+          : 'Kart / taksit oranı kaydedilemedi.',
+      );
+    } finally {
+      setCardMarkupRateSaving(false);
+    }
+  };
+
   const loadSourceExtraCosts = async () => {
     setSourceExtraCostsLoading(true);
     setSourceExtraCostsError(null);
@@ -445,29 +598,39 @@ export function CitaCostList() {
     setSourceDrawerOpen(true);
     setSourceNotice(null);
     setEditingMaterialId(null);
+    setMdfCashInput('');
     setPriceInput('');
     setSourceError(null);
     setEditingExtraCostCode(null);
     setExtraCostAmountInput('');
     setEditingPriceBandId(null);
     setCashPriceInput('');
-    setCardPriceInput('');
     setSourcePriceBandsError(null);
     void loadSourceMaterials();
     void loadSourceExtraCosts();
     void loadSourcePriceBands();
+    void loadCitaCardMarkupRate();
   };
+
+  const openedInitialDrawer = useRef(false);
+  useEffect(() => {
+    if (!initialSourceDrawer || !data || openedInitialDrawer.current) return;
+    openedInitialDrawer.current = true;
+    openSourceDrawer();
+    // Liste hazır olunca kaynak çekmecesini bir kez açar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSourceDrawer, data]);
 
   const closeSourceDrawer = () => {
     if (sourceBusy) return;
     setSourceDrawerOpen(false);
     setEditingMaterialId(null);
+    setMdfCashInput('');
     setPriceInput('');
     setEditingExtraCostCode(null);
     setExtraCostAmountInput('');
     setEditingPriceBandId(null);
     setCashPriceInput('');
-    setCardPriceInput('');
     setSourceError(null);
     setSourceExtraCostsError(null);
     setSourcePriceBandsError(null);
@@ -479,10 +642,40 @@ export function CitaCostList() {
     widthMm: string;
     lengthMm: string;
   }) => {
-    const result = await fetchCitaProductionCost(query);
-    setCustomResult(result);
-    setCustomQuery(query);
+    const requestId = customRequestId.current + 1;
+    customRequestId.current = requestId;
+    setCustomLoading(true);
+    setCustomError(null);
+    try {
+      const result = await fetchCitaProductionCost({
+        ...query,
+        materialPriceType,
+      });
+      if (requestId !== customRequestId.current) return;
+      setCustomResult(result);
+      setCustomQuery(query);
+    } catch (requestError) {
+      if (requestId !== customRequestId.current) return;
+      setCustomResult(null);
+      setCustomError(
+        friendlyMaterialPriceError(
+          requestError instanceof ApiError
+            ? requestError.message
+            : 'Özel ölçü hesaplanamadı.',
+        ),
+      );
+    } finally {
+      if (requestId === customRequestId.current) setCustomLoading(false);
+    }
   };
+
+  useEffect(() => {
+    if (!customQuery) return;
+    setCustomResult(null);
+    void refetchCustomResult(customQuery);
+    // Açık özel ölçü, alış türü değişince aynı ölçüyle yeniden hesaplanır.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [materialPriceType]);
 
   const saveExtraCost = async (event: FormEvent) => {
     event.preventDefault();
@@ -510,6 +703,7 @@ export function CitaCostList() {
       setEditingExtraCostCode(null);
       setExtraCostAmountInput('');
       setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
       await loadSourceExtraCosts();
       if (customQuery) {
         await refetchCustomResult(customQuery);
@@ -530,12 +724,9 @@ export function CitaCostList() {
     const band = sourcePriceBands.find((item) => item.id === editingPriceBandId);
     if (!band || !editingPriceBandId) return;
 
-    if (
-      !isPositiveDecimalInput(cashPriceInput) ||
-      !isPositiveDecimalInput(cardPriceInput)
-    ) {
+    if (!isPositiveDecimalInput(cashPriceInput)) {
       setSourcePriceBandsError(
-        'Nakit ve kart fiyatı 0’dan büyük geçerli bir tutar olmalıdır.',
+        'Nakit fiyatı 0’dan büyük geçerli bir tutar olmalıdır.',
       );
       return;
     }
@@ -545,13 +736,12 @@ export function CitaCostList() {
     try {
       await updateCitaPublishedPriceBand(editingPriceBandId, {
         cashPrice: normalizeDecimalInput(cashPriceInput),
-        cardPrice: normalizeDecimalInput(cardPriceInput),
       });
       setSourceNotice(`${band.displayName} satış fiyatı kaydedildi.`);
       setEditingPriceBandId(null);
       setCashPriceInput('');
-      setCardPriceInput('');
       setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
       await loadSourcePriceBands();
       if (customQuery) {
         await refetchCustomResult(customQuery);
@@ -569,46 +759,40 @@ export function CitaCostList() {
 
   const startPriceEdit = (material: RawMaterial) => {
     setEditingMaterialId(material.id);
+    setMdfCashInput(material.cashPrice ?? '');
     setPriceInput(material.cardInstallmentPrice ?? '');
     setSourceError(null);
     setSourceNotice(null);
   };
 
-  const saveCardInstallmentPrice = async (event: FormEvent) => {
+  const savePurchasePrices = async (event: FormEvent) => {
     event.preventDefault();
     const material = sourceMaterials.find((item) => item.id === editingMaterialId);
     if (!material) return;
 
-    if (!isPositiveDecimalInput(priceInput)) {
-      setSourceError(
-        'Kart / Taksit fiyatı 0’dan büyük geçerli bir tutar olmalıdır.',
-      );
-      return;
-    }
-
     setSourceSaving(true);
     setSourceError(null);
     try {
-      const result = await updateRawMaterialCardInstallmentPrice(material.id, {
-        price: normalizeDecimalInput(priceInput),
-      });
-      setSourceNotice(
-        result.changed
-          ? `${material.thicknessMm} mm Kart / Taksit fiyatı güncellendi.`
-          : 'Fiyat değişmedi; yeni geçmiş kaydı oluşturulmadı.',
+      const result = await saveChangedPurchasePrices(
+        material,
+        mdfCashInput,
+        priceInput,
       );
+      setSourceNotice(result.message);
       setEditingMaterialId(null);
+      setMdfCashInput('');
       setPriceInput('');
       setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
       await loadSourceMaterials(data);
       if (customQuery) {
         await refetchCustomResult(customQuery);
       }
     } catch (requestError) {
       setSourceError(
-        requestError instanceof ApiError
+        requestError instanceof Error
           ? requestError.message
-          : 'Kart / Taksit fiyatı kaydedilemedi.',
+          : 'MDF alış fiyatı kaydedilemedi.',
       );
     } finally {
       setSourceSaving(false);
@@ -629,25 +813,12 @@ export function CitaCostList() {
       return;
     }
 
-    setCustomLoading(true);
-    setCustomError(null);
-    try {
-      const query = {
-        thicknessMm: customThickness,
-        widthMm,
-        lengthMm: CITA_LENGTH_MM,
-      };
-      await refetchCustomResult(query);
-    } catch (requestError) {
-      setCustomResult(null);
-      setCustomError(
-        requestError instanceof ApiError
-          ? requestError.message
-          : 'Özel ölçü hesaplanamadı.',
-      );
-    } finally {
-      setCustomLoading(false);
-    }
+    const query = {
+      thicknessMm: customThickness,
+      widthMm,
+      lengthMm: CITA_LENGTH_MM,
+    };
+    await refetchCustomResult(query);
   };
 
   return (
@@ -657,6 +828,10 @@ export function CitaCostList() {
           <span className="cc-supurgelik-eyebrow">Çıta maliyet listesi</span>
           <h2>{data?.productName ?? 'Çıta'}</h2>
           <p>Standart ölçüler ve özel ölçü hesabı</p>
+          <p className="cc-note">
+            Seçili MDF alış türü: {materialPriceTypeLabel(materialPriceType)}.
+            Yayımlanmış nakit satış fiyatı bu seçimden bağımsızdır.
+          </p>
         </div>
         <div className="cc-supurgelik-heading-actions">
           <button
@@ -730,6 +905,14 @@ export function CitaCostList() {
         {customResult ? (
           <dl className="cc-cita-custom-result">
             <div>
+              <dt>Seçili MDF Alış Türü</dt>
+              <dd>
+                {materialPriceTypeLabel(
+                  customResult.materialPriceType ?? materialPriceType,
+                )}
+              </dd>
+            </div>
+            <div>
               <dt>Kalınlık</dt>
               <dd>{formatThicknessGroupLabel(customResult.thicknessMm).replace(' MM', ' mm')}</dd>
             </div>
@@ -760,7 +943,7 @@ export function CitaCostList() {
             <div>
               <dt>Kesim</dt>
               <dd>
-                <MoneyCell value={extraAmount(customResult, 'CUTTING')} />
+                <MoneyCell value={cuttingUnitAmount(customResult)} />
               </dd>
             </div>
             <div>
@@ -779,23 +962,33 @@ export function CitaCostList() {
               <dt>Fiyat Bandı</dt>
               <dd>{priceBandLabel(customResult) ?? '—'}</dd>
             </div>
-            <div>
-              <dt>Nakit Satış</dt>
-              <dd>
-                <MoneyCell
-                  value={publishedPriceAmount(customResult, 'publishedCashPrice')}
-                />
-              </dd>
-            </div>
-            <div>
-              <dt>Kart / Taksit</dt>
-              <dd>
-                <MoneyCell
-                  value={publishedPriceAmount(customResult, 'publishedCardPrice')}
-                />
-              </dd>
-            </div>
-            {isPublishedPriceMissing(customResult) ? (
+            {showsCashSalePrice(materialPriceType) ? (
+              <div>
+                <dt>Nakit Satış</dt>
+                <dd>
+                  <MoneyCell
+                    value={publishedPriceAmount(customResult, 'publishedCashPrice')}
+                  />
+                </dd>
+              </div>
+            ) : null}
+            {showsCardSalePrice(materialPriceType) ? (
+              <div>
+                <dt>Kart / Taksit Satış</dt>
+                <dd>
+                  {publishedPriceAmount(customResult, 'publishedCardPrice') != null ? (
+                    <MoneyCell
+                      value={publishedPriceAmount(customResult, 'publishedCardPrice')}
+                    />
+                  ) : (
+                    customResult.pricing?.cardStatusMessage ??
+                    'Kart/taksit oranı tanımlı değil'
+                  )}
+                </dd>
+              </div>
+            ) : null}
+            {showsCashSalePrice(materialPriceType) &&
+            isPublishedPriceMissing(customResult) ? (
               <div className="cc-cita-custom-price-note">
                 <dt>Satış</dt>
                 <dd>Satış fiyatı tanımlı değil</dd>
@@ -837,7 +1030,11 @@ export function CitaCostList() {
             </button>
           </div>
         ) : (
-          <CitaRowsTable rows={data.rows} />
+          <CitaRowsTable
+            rows={data.rows}
+            materialPriceType={materialPriceType}
+            onProfitSaved={() => setRequestVersion((version) => version + 1)}
+          />
         )}
       </div>
 
@@ -871,8 +1068,88 @@ export function CitaCostList() {
 
             <div className="cc-supurgelik-source-body">
               <div className="cc-supurgelik-source-section-heading">
+                <span>Kart / Taksit Farkı (%)</span>
+                <small>Nakit satış × (1 + oran / 100)</small>
+              </div>
+              {cardMarkupRateError ? (
+                <div className="cc-alert">{cardMarkupRateError}</div>
+              ) : null}
+              <div className="cc-supurgelik-source-list">
+                <div className="cc-supurgelik-source-row">
+                  <div className="cc-supurgelik-source-material">
+                    <strong>Kart / Taksit Farkı</strong>
+                    <span>Çıta ürün grubu</span>
+                  </div>
+                  {editingCardMarkupRate ? (
+                    <form
+                      className="cc-supurgelik-source-edit"
+                      onSubmit={(event) => void saveCitaCardMarkupRate(event)}
+                    >
+                      <label className="cc-field">
+                        <span>Kart / Taksit Farkı (%)</span>
+                        <input
+                          className="cc-input"
+                          inputMode="decimal"
+                          autoFocus
+                          value={cardMarkupRateInput}
+                          onChange={(event) =>
+                            setCardMarkupRateInput(event.target.value)
+                          }
+                          placeholder="20"
+                          disabled={cardMarkupRateSaving}
+                        />
+                      </label>
+                      <div className="cc-supurgelik-source-edit-actions">
+                        <button
+                          type="button"
+                          className="cc-btn cc-btn-sm"
+                          onClick={() => {
+                            setEditingCardMarkupRate(false);
+                            setCardMarkupRateInput('');
+                            setCardMarkupRateError(null);
+                          }}
+                          disabled={cardMarkupRateSaving}
+                        >
+                          İptal
+                        </button>
+                        <button
+                          type="submit"
+                          className="cc-btn cc-btn-primary cc-btn-sm"
+                          disabled={cardMarkupRateSaving}
+                        >
+                          {cardMarkupRateSaving ? 'Kaydediliyor…' : 'Kaydet'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div className="cc-supurgelik-source-price">
+                      <span>Mevcut Oran</span>
+                      <strong>
+                        {cardMarkupRate == null
+                          ? 'Kart/taksit oranı tanımlı değil'
+                          : `${cardMarkupRate}%`}
+                      </strong>
+                      <button
+                        type="button"
+                        className="cc-btn cc-btn-sm"
+                        onClick={() => {
+                          setEditingCardMarkupRate(true);
+                          setCardMarkupRateInput(cardMarkupRate ?? '');
+                          setCardMarkupRateError(null);
+                          setSourceNotice(null);
+                        }}
+                        disabled={sourceBusy}
+                      >
+                        Düzenle
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="cc-supurgelik-source-section-heading cc-supurgelik-source-section-divider">
                 <span>Ham MDF Fiyatları</span>
-                <small>Kart / taksit alış fiyatı</small>
+                <small>Nakit ve kart / taksitli alış</small>
               </div>
 
               {sourceNotice ? <div className="cc-notice">{sourceNotice}</div> : null}
@@ -913,14 +1190,24 @@ export function CitaCostList() {
                         {editing ? (
                           <form
                             className="cc-supurgelik-source-edit"
-                            onSubmit={(event) => void saveCardInstallmentPrice(event)}
+                            onSubmit={(event) => void savePurchasePrices(event)}
                           >
                             <label className="cc-field">
-                              <span>Kart / Taksit MDF Fiyatı</span>
+                              <span>Nakit MDF Alış Fiyatı</span>
                               <input
                                 className="cc-input"
                                 inputMode="decimal"
                                 autoFocus
+                                value={mdfCashInput}
+                                onChange={(event) => setMdfCashInput(event.target.value)}
+                                disabled={sourceSaving}
+                              />
+                            </label>
+                            <label className="cc-field">
+                              <span>Kart / Taksitli MDF Alış Fiyatı</span>
+                              <input
+                                className="cc-input"
+                                inputMode="decimal"
                                 value={priceInput}
                                 onChange={(event) => setPriceInput(event.target.value)}
                                 disabled={sourceSaving}
@@ -932,6 +1219,7 @@ export function CitaCostList() {
                                 className="cc-btn cc-btn-sm"
                                 onClick={() => {
                                   setEditingMaterialId(null);
+                                  setMdfCashInput('');
                                   setPriceInput('');
                                   setSourceError(null);
                                 }}
@@ -949,15 +1237,25 @@ export function CitaCostList() {
                             </div>
                           </form>
                         ) : (
-                          <div className="cc-supurgelik-source-price">
-                            <span>Kart / Taksit Fiyatı</span>
-                            {material.cardInstallmentPrice == null ? (
-                              <strong className="missing">Tanımlı değil</strong>
-                            ) : (
-                              <strong>
-                                {formatTryTwoDecimals(material.cardInstallmentPrice)}
-                              </strong>
-                            )}
+                          <div className="cc-supurgelik-source-prices">
+                            <div className="cc-supurgelik-source-price">
+                              <span>Nakit MDF Alış Fiyatı</span>
+                              {material.cashPrice == null ? (
+                                <strong className="missing">Tanımlı değil</strong>
+                              ) : (
+                                <strong>{formatTryTwoDecimals(material.cashPrice)}</strong>
+                              )}
+                            </div>
+                            <div className="cc-supurgelik-source-price">
+                              <span>Kart / Taksitli MDF Alış Fiyatı</span>
+                              {material.cardInstallmentPrice == null ? (
+                                <strong className="missing">Tanımlı değil</strong>
+                              ) : (
+                                <strong>
+                                  {formatTryTwoDecimals(material.cardInstallmentPrice)}
+                                </strong>
+                              )}
+                            </div>
                             <button
                               type="button"
                               className="cc-btn cc-btn-sm"
@@ -1134,18 +1432,6 @@ export function CitaCostList() {
                                 disabled={priceBandSaving}
                               />
                             </label>
-                            <label className="cc-field">
-                              <span>Kart / Taksit</span>
-                              <input
-                                className="cc-input"
-                                inputMode="decimal"
-                                value={cardPriceInput}
-                                onChange={(event) =>
-                                  setCardPriceInput(event.target.value)
-                                }
-                                disabled={priceBandSaving}
-                              />
-                            </label>
                             <div className="cc-supurgelik-source-edit-actions">
                               <button
                                 type="button"
@@ -1153,7 +1439,6 @@ export function CitaCostList() {
                                 onClick={() => {
                                   setEditingPriceBandId(null);
                                   setCashPriceInput('');
-                                  setCardPriceInput('');
                                   setSourcePriceBandsError(null);
                                 }}
                                 disabled={priceBandSaving}
@@ -1177,19 +1462,12 @@ export function CitaCostList() {
                                 {formatTryTwoDecimals(band.cashPrice)}
                               </strong>
                             </div>
-                            <div>
-                              <span>Kart / Taksit</span>
-                              <strong>
-                                {formatTryTwoDecimals(band.cardPrice)}
-                              </strong>
-                            </div>
                             <button
                               type="button"
                               className="cc-btn cc-btn-sm"
                               onClick={() => {
                                 setEditingPriceBandId(band.id);
                                 setCashPriceInput(band.cashPrice);
-                                setCardPriceInput(band.cardPrice);
                                 setSourcePriceBandsError(null);
                                 setSourceNotice(null);
                               }}

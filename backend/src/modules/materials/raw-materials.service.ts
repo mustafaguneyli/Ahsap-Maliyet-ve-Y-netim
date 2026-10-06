@@ -13,6 +13,7 @@ import { ListRawMaterialsQueryDto } from './dto/list-raw-materials-query.dto';
 import { UpdateRawMaterialDto } from './dto/update-raw-material.dto';
 import { UpdateRawMaterialPricesDto } from './dto/update-raw-material-prices.dto';
 import { UpdateCardInstallmentPriceDto } from './dto/update-card-installment-price.dto';
+import { UpdateCashPriceDto } from './dto/update-cash-price.dto';
 
 const ENTITY_TYPE = 'RawMaterial';
 const PRICE_ENTITY_TYPE = 'RawMaterialPrice';
@@ -293,6 +294,45 @@ export class RawMaterialsService {
     });
 
     return this.findOne(id);
+  }
+
+  /**
+   * Tek CASH kaynağını version/history + audit ile değiştirir.
+   * Kart fiyatına dokunmaz. Aynı Decimal değer gönderilirse yeni dönem açmaz.
+   */
+  async updateCashPrice(
+    id: string,
+    dto: UpdateCashPriceDto,
+    now: Date = new Date(),
+  ): Promise<RawMaterialCardPriceUpdateResult> {
+    let price: ReturnType<typeof toDecimal>;
+    try {
+      price = toDecimal(dto.price);
+    } catch {
+      throw new BadRequestException('Nakit alış fiyatı geçerli bir Decimal olmalıdır.');
+    }
+    if (!price.isFinite() || price.lte(0)) {
+      throw new BadRequestException('Nakit alış fiyatı 0’dan büyük olmalıdır.');
+    }
+
+    const changed = await this.prisma.$transaction(async (tx) => {
+      const material = await tx.rawMaterial.findUnique({ where: { id } });
+      if (!material) {
+        throw new NotFoundException(`Ham madde bulunamadı: ${id}`);
+      }
+
+      return this.replaceOpenPrice(tx, {
+        rawMaterialId: id,
+        priceType: MaterialPriceType.CASH,
+        newPrice: price,
+        effectiveFrom: now,
+      });
+    });
+
+    return {
+      changed,
+      material: await this.findOne(id),
+    };
   }
 
   /**

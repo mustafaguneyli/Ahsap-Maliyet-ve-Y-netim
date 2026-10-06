@@ -36,6 +36,7 @@ export async function seedDoorFrameProducts(
       data: {
         code: PRODUCT_GROUP.code,
         name: PRODUCT_GROUP.name,
+        calculatorType: 'DOOR_FRAME',
         isActive: true,
       },
     });

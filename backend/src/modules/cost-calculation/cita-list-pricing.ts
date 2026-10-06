@@ -8,6 +8,11 @@ import {
 import { PrismaService } from '../../prisma/prisma.service';
 import { CITA_PRODUCT_GROUP_SEED } from '../products/cita-product-seed';
 import {
+  applyPercentCardSale,
+  CARD_MARKUP_RATE_MISSING,
+  CARD_MARKUP_RATE_MISSING_TR,
+} from '../../calculation-engine/pricing/percent-card-sale';
+import {
   CITA_PUBLISHED_PRICE_MISSING,
   selectCitaPublishedPrice,
   type CitaPublishedPriceBandView,
@@ -27,11 +32,17 @@ export type CitaListPricing = {
   } | null;
   publishedCashPrice: string | null;
   publishedCardPrice: string | null;
+  cardStatusCode: typeof CARD_MARKUP_RATE_MISSING | null;
+  cardStatusMessage: string | null;
   statusCode: typeof CITA_PUBLISHED_PRICE_MISSING | null;
+  /** Gösterim / ölçü override. Yayınlanmış nakit-kart bandını değiştirmez. */
+  profitRate?: string | null;
+  profitRateSource?: string | null;
 };
 
 export function toCitaListPricing(
   lookup: CitaPublishedPriceLookup,
+  cardMarkupRate: string | null | undefined,
 ): CitaListPricing {
   if (lookup.statusCode === CITA_PUBLISHED_PRICE_MISSING) {
     return {
@@ -39,9 +50,16 @@ export function toCitaListPricing(
       priceBand: null,
       publishedCashPrice: null,
       publishedCardPrice: null,
+      cardStatusCode: null,
+      cardStatusMessage: null,
       statusCode: CITA_PUBLISHED_PRICE_MISSING,
     };
   }
+  const card = applyPercentCardSale({
+    cashPrice: lookup.cashPrice,
+    cardMarkupRate,
+    rounding: 'none',
+  });
   return {
     pricingAvailable: true,
     priceBand: {
@@ -49,7 +67,9 @@ export function toCitaListPricing(
       maxWidthMm: lookup.maxWidthMm,
     },
     publishedCashPrice: lookup.cashPrice,
-    publishedCardPrice: lookup.cardPrice,
+    publishedCardPrice: card.cardSalePrice,
+    cardStatusCode: card.statusCode,
+    cardStatusMessage: card.statusMessage,
     statusCode: null,
   };
 }
@@ -57,9 +77,10 @@ export function toCitaListPricing(
 export function resolveCitaListPricing(
   bands: readonly CitaPublishedPriceBandView[],
   query: { widthMm: number; thicknessMm: number },
+  cardMarkupRate: string | null | undefined,
 ): CitaListPricing {
   try {
-    return toCitaListPricing(selectCitaPublishedPrice(bands, query));
+    return toCitaListPricing(selectCitaPublishedPrice(bands, query), cardMarkupRate);
   } catch (error) {
     if (error instanceof Error) {
       throw new BadRequestException(error.message);
@@ -115,7 +136,11 @@ export async function loadCitaPublishedPriceBandViews(
 
 export function attachCitaListPricing<
   T extends { thicknessMm: string; widthMm: string },
->(row: T, bands: readonly CitaPublishedPriceBandView[]): T & { pricing: CitaListPricing } {
+>(
+  row: T,
+  bands: readonly CitaPublishedPriceBandView[],
+  cardMarkupRate: string | null | undefined,
+): T & { pricing: CitaListPricing } {
   const thicknessMm = parseCitaThicknessMm(row.thicknessMm);
   const widthMm = integerMmOrNull(toDecimal(row.widthMm));
   if (widthMm == null) {
@@ -125,7 +150,7 @@ export function attachCitaListPricing<
   }
   return {
     ...row,
-    pricing: resolveCitaListPricing(bands, { widthMm, thicknessMm }),
+    pricing: resolveCitaListPricing(bands, { widthMm, thicknessMm }, cardMarkupRate),
   };
 }
 
@@ -134,16 +159,19 @@ const MISSING_PRICING: CitaListPricing = {
   priceBand: null,
   publishedCashPrice: null,
   publishedCardPrice: null,
+  cardStatusCode: null,
+  cardStatusMessage: null,
   statusCode: CITA_PUBLISHED_PRICE_MISSING,
 };
 
 /**
- * Custom/standart tek ölçü: ticari banda sınıflandır, sonra DB master min/max ile oku.
- * 25 mm → 3–4 cm → mevcut 30–40 master. Yeni band yazılmaz.
+ * Custom tek ölçü: tolerans bandına sınıflandır, sonra mevcut DB master min/max ile oku.
+ * 25 mm → 1–2 cm → mevcut 10–20 master. Master aralıkları yazılmaz.
  */
 export function resolveCitaClassifiedPricing(
   bands: readonly CitaPublishedPriceBandView[],
   query: { widthMm: string | number; thicknessMm: number },
+  cardMarkupRate: string | null | undefined,
 ): CitaListPricing {
   const commercial = classifyCitaCommercialWidthBand(query.widthMm);
   if (commercial == null) {
@@ -167,6 +195,12 @@ export function resolveCitaClassifiedPricing(
     return MISSING_PRICING;
   }
 
+  const card = applyPercentCardSale({
+    cashPrice: band.cashPrice,
+    cardMarkupRate,
+    rounding: 'none',
+  });
+
   return {
     pricingAvailable: true,
     priceBand: {
@@ -175,21 +209,31 @@ export function resolveCitaClassifiedPricing(
       displayName: commercial.displayName,
     },
     publishedCashPrice: band.cashPrice,
-    publishedCardPrice: band.cardPrice,
+    publishedCardPrice: card.cardSalePrice,
+    cardStatusCode: card.statusCode,
+    cardStatusMessage: card.statusMessage,
     statusCode: null,
   };
 }
 
 export function attachCitaClassifiedPricing<
   T extends { thicknessMm: string; widthMm: string },
->(row: T, bands: readonly CitaPublishedPriceBandView[]): T & { pricing: CitaListPricing } {
+>(
+  row: T,
+  bands: readonly CitaPublishedPriceBandView[],
+  cardMarkupRate: string | null | undefined,
+): T & { pricing: CitaListPricing } {
   const thicknessMm = parseCitaThicknessMm(row.thicknessMm);
   parseCitaWidthMm(row.widthMm);
   return {
     ...row,
-    pricing: resolveCitaClassifiedPricing(bands, {
-      widthMm: row.widthMm,
-      thicknessMm,
-    }),
+    pricing: resolveCitaClassifiedPricing(
+      bands,
+      {
+        widthMm: row.widthMm,
+        thicknessMm,
+      },
+      cardMarkupRate,
+    ),
   };
 }

@@ -230,6 +230,14 @@ function summarizeEvent(
     return 'Dekoratif fark güncellendi';
   }
 
+  if (event.entityType === 'PricingRowException') {
+    return 'Dekoratif pervaz fark oranı güncellendi';
+  }
+
+  if (event.entityType === 'ProductPricingOverride') {
+    return 'Ölçü kâr oranı güncellendi';
+  }
+
   if (event.entityType === 'PriceOverride') {
     return 'Satış fiyatı override güncellendi';
   }

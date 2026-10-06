@@ -51,9 +51,18 @@ describe('applyPublishedSalePrices', () => {
     expect(result.publishedCardPrice).toBe('360');
   });
 
-  it('eksik override tutarında sessiz varsayım yapmaz', () => {
-    expect(() =>
-      applyPublishedSalePrices('301', '20', { id: 'ov1', cashPrice: '', reason: null }),
-    ).toThrow('cashOverride.cashPrice eksik.');
+  it('oran yoksa nakit yayımlanır, kart null', () => {
+    const result = applyPublishedSalePrices('300', null, null);
+    expect(result.publishedCashPrice).toBe('300');
+    expect(result.publishedCardPrice).toBeNull();
+    expect(result.cardStatusMessage).toBe('Kart/taksit oranı tanımlı değil');
+  });
+
+  it('%20→%25: nakit 300 aynı, kart 360→375', () => {
+    const twenty = applyPublishedSalePrices('300', '20', null);
+    const twentyFive = applyPublishedSalePrices('300', '25', null);
+    expect(twenty.publishedCashPrice).toBe(twentyFive.publishedCashPrice);
+    expect(twenty.publishedCardPrice).toBe('360');
+    expect(twentyFive.publishedCardPrice).toBe('375');
   });
 });

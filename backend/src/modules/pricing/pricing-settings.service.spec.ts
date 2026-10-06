@@ -33,6 +33,7 @@ describe('PricingSettingsService', () => {
       },
       pricingSetting: {
         findFirst: jest.fn().mockResolvedValue(current),
+        findMany: jest.fn().mockResolvedValue([]),
       },
     };
     const service = new PricingSettingsService(prisma as never, { record: jest.fn() } as never);
@@ -41,6 +42,8 @@ describe('PricingSettingsService', () => {
     expect(result.vatRate).toBe('10');
     expect(result.profitRate).toBe('20');
     expect(result.cardMarkupRate).toBe('20');
+    expect(result.groupCardMarkupRate).toBeNull();
+    expect(result.productCardMarkupRate).toBe('20');
   });
 
   it('PATCH eski kaydı kapatır, yeni kayıt ve audit yazar (KDV 10→12)', async () => {
@@ -57,6 +60,7 @@ describe('PricingSettingsService', () => {
       },
       pricingSetting: {
         findFirst: jest.fn().mockResolvedValue(current),
+        findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({ ...current, isActive: false }),
         create: jest.fn().mockResolvedValue({
           id: 'ps-new',
@@ -147,6 +151,7 @@ describe('PricingSettingsService', () => {
           cardFixedSurchargeAmount: { toString: () => '2' },
           isActive: true,
         }),
+        findMany: jest.fn().mockResolvedValue([]),
       },
     };
     const service = new PricingSettingsService(
@@ -195,6 +200,7 @@ describe('PricingSettingsService', () => {
       },
       pricingSetting: {
         findFirst: jest.fn().mockResolvedValue(oldSetting),
+        findMany: jest.fn().mockResolvedValue([]),
         update: jest.fn().mockResolvedValue({ ...oldSetting, isActive: false }),
         create: jest.fn().mockResolvedValue({
           id: 'ps-new-ayarli',
@@ -238,7 +244,7 @@ describe('PricingSettingsService', () => {
     expect(result.cardFixedSurchargeAmount).toBe('2');
   });
 
-  it('Pervaz PATCH cardFixed 2→3 versionlar; profit korunur', async () => {
+  it('Pervaz PATCH cardMarkupRate group-scope versionlar; profit same-value no-op', async () => {
     const oldSetting = {
       id: 'ps-old',
       profitRate: { toString: () => '15' },
@@ -265,13 +271,14 @@ describe('PricingSettingsService', () => {
       },
       pricingSetting: {
         findFirst: jest.fn().mockResolvedValue(oldSetting),
-        update: jest.fn().mockResolvedValue({ ...oldSetting, isActive: false }),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
         create: jest.fn().mockResolvedValue({
-          id: 'ps-new',
-          profitRate: { toString: () => '15' },
+          id: 'ps-group-card',
+          profitRate: null,
           vatRate: null,
-          cardMarkupRate: null,
-          cardFixedSurchargeAmount: { toString: () => '3' },
+          cardMarkupRate: { toString: () => '20' },
+          cardFixedSurchargeAmount: null,
           isActive: true,
         }),
       },
@@ -285,15 +292,116 @@ describe('PricingSettingsService', () => {
     const result = await service.replacePervazProductSetting('AYARLI_PERVAZ', {
       productGroup: 'PERVAZ',
       profitRate: '15',
-      cardFixedSurchargeAmount: '3',
+      cardMarkupRate: '20',
     });
 
-    expect(tx.pricingSetting.create.mock.calls[0][0].data.cardFixedSurchargeAmount.toString()).toBe(
-      '3',
-    );
-    expect(tx.pricingSetting.create.mock.calls[0][0].data.profitRate.toString()).toBe('15');
-    expect(result.cardFixedSurchargeAmount).toBe('3');
+    expect(tx.pricingSetting.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        productGroupId: 'g-pervaz',
+        productId: null,
+        isActive: true,
+      }),
+    });
     expect(result.profitRate).toBe('15');
+    expect(result.cardMarkupRate).toBe('20');
+    expect(result.cardFixedSurchargeAmount).toBe('2');
+  });
+
+  it('same-value no-op: group kart oranı aynıysa audit yazmaz', async () => {
+    const current = {
+      id: 'ps-old',
+      productId: 'p30',
+      productGroupId: null,
+      vatRate: { toString: () => '10' },
+      profitRate: { toString: () => '20' },
+      cardMarkupRate: { toString: () => '20' },
+      isActive: true,
+    };
+    const tx = {
+      productGroup: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'g1',
+          code: 'door_frame',
+          isActive: true,
+        }),
+      },
+      product: {
+        findUnique: jest.fn().mockResolvedValue(product),
+      },
+      pricingSetting: {
+        findFirst: jest.fn().mockResolvedValue(current),
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'ps-group',
+            cardMarkupRate: { toString: () => '20' },
+            vatRate: null,
+            profitRate: null,
+            cardFixedSurchargeAmount: null,
+            isActive: true,
+          },
+        ]),
+        update: jest.fn(),
+        create: jest.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
+    };
+    const audit = { record: jest.fn().mockResolvedValue({}) };
+    const service = new PricingSettingsService(prisma as never, audit as never);
+
+    const result = await service.replaceDoorFrameProductSetting('30_MM', {
+      productGroup: 'door_frame',
+      vatRate: '10',
+      profitRate: '20',
+      cardMarkupRate: '20',
+    });
+
+    expect(tx.pricingSetting.update).not.toHaveBeenCalled();
+    expect(tx.pricingSetting.create).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+    expect(result.cardMarkupRate).toBe('20');
+  });
+
+  it('audit hata verirse PATCH transaction başarısız olur', async () => {
+    const tx = {
+      productGroup: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'g1',
+          code: 'door_frame',
+          isActive: true,
+        }),
+      },
+      product: {
+        findUnique: jest.fn().mockResolvedValue(product),
+      },
+      pricingSetting: {
+        findFirst: jest.fn().mockResolvedValue(current),
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn().mockResolvedValue({ ...current, isActive: false }),
+        create: jest.fn().mockResolvedValue({
+          id: 'ps-new',
+          vatRate: { toString: () => '12' },
+          profitRate: { toString: () => '20' },
+          cardMarkupRate: { toString: () => '20' },
+          isActive: true,
+        }),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn(async (fn: (client: typeof tx) => Promise<unknown>) => fn(tx)),
+    };
+    const audit = { record: jest.fn().mockRejectedValue(new Error('audit fail')) };
+    const service = new PricingSettingsService(prisma as never, audit as never);
+
+    await expect(
+      service.replaceDoorFrameProductSetting('30_MM', {
+        productGroup: 'door_frame',
+        vatRate: '12',
+        profitRate: '20',
+        cardMarkupRate: '20',
+      }),
+    ).rejects.toThrow('audit fail');
   });
 
   it('Geniş Kılçık için cardFixed yazmayı reddeder', async () => {

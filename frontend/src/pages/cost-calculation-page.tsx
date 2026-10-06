@@ -17,21 +17,50 @@ import {
   getDoorFramePricingSetting,
   getPervazPricingSetting,
   updateDoorFramePricingSetting,
+  updateGroupCardMarkupRate,
   updatePervazPricingSetting,
 } from '../api/pricing-settings-api';
+import {
+  DekoratifPervazPremiumItem,
+  DekoratifPervazPremiumProductCode,
+  listDekoratifPervazPremiums,
+  updateDekoratifPervazPremium,
+} from '../api/dekoratif-pervaz-premiums-api';
 import { ApiError } from '../lib/api';
+import { formatPieceSizeCm } from '../lib/length';
+import {
+  friendlyMaterialPriceError,
+  materialPriceTypeLabel,
+  showsCardSalePrice,
+  showsCashSalePrice,
+  type MaterialPriceType,
+} from '../lib/material-price-type';
 import { formatPercentRate, formatTry } from '../lib/money';
 import { CitaCostList } from '../components/cita-cost-list';
-import { OrderCostDrawer } from '../components/order-cost-drawer';
+import { CatalogItemDrawer } from '../components/catalog-item-drawer';
+import { ProfitRateCell } from '../components/profit-rate-cell';
+import { GenericProductCostTable } from '../components/generic-product-cost-table';
 import { PervazCostTable } from '../components/pervaz-cost-table';
 import { SupurgelikCostList } from '../components/supurgelik-cost-list';
 import {
   deactivateDoorFrameCashOverride,
   upsertDoorFrameCashOverride,
 } from '../api/price-overrides-api';
+import {
+  listProductGroups,
+  type ProductGroupSummary,
+} from '../api/product-groups-api';
+import { extraCostTypeLabel } from '../lib/display-labels';
 import './cost-calculation-page.css';
 
-type ProductGroup = 'door_frame' | 'PERVAZ' | 'SUPURGELIK' | 'CITA';
+const SPECIAL_COST_GROUPS = new Set([
+  'door_frame',
+  'PERVAZ',
+  'SUPURGELIK',
+  'CITA',
+]);
+
+type ProductGroup = string;
 type DoorFrameVariant = '34_MM' | '30_MM';
 type PervazProduct =
   | 'AYARLI_PERVAZ'
@@ -53,10 +82,10 @@ type PricingForm = {
 };
 
 const EXTRA_LABELS: Record<keyof ExtraForm, string> = {
-  CUTTING: 'Kesim',
-  GLUE: 'Tutkal',
-  LABOR: 'İşçilik',
-  OTHER: 'Diğer',
+  CUTTING: extraCostTypeLabel('CUTTING'),
+  GLUE: extraCostTypeLabel('GLUE'),
+  LABOR: extraCostTypeLabel('LABOR'),
+  OTHER: extraCostTypeLabel('OTHER'),
 };
 
 const EXTRA_ORDER: Array<keyof ExtraForm> = ['CUTTING', 'GLUE', 'LABOR', 'OTHER'];
@@ -107,6 +136,13 @@ function amountsEqual(a: string, b: string): boolean {
   return strip(na) === strip(nb);
 }
 
+function optionalAmountsEqual(a: string, b: string): boolean {
+  const na = normalizeDecimalInput(a);
+  const nb = normalizeDecimalInput(b);
+  if (na === '' && nb === '') return true;
+  return amountsEqual(a, b);
+}
+
 function partByThickness(row: DoorFrameMdfRow, thickness: string) {
   return row.parts.find((p) => p.thicknessMm === thickness || p.thicknessMm === `${thickness}.0`);
 }
@@ -115,8 +151,22 @@ function emptyExtraForm(): ExtraForm {
   return { CUTTING: '', GLUE: '', LABOR: '', OTHER: '' };
 }
 
-export function CostCalculationPage() {
-  const [productGroup, setProductGroup] = useState<ProductGroup>('door_frame');
+export function CostCalculationPage({
+  initialProductGroup = 'door_frame',
+  initialSettingsOpen = false,
+  materialPriceType,
+  onMaterialPriceTypeChange,
+  onOpenPriceList,
+}: {
+  initialProductGroup?: ProductGroup;
+  initialSettingsOpen?: boolean;
+  materialPriceType: MaterialPriceType;
+  onMaterialPriceTypeChange: (value: MaterialPriceType) => void;
+  onOpenPriceList?: () => void;
+}) {
+  const [productGroup, setProductGroup] =
+    useState<ProductGroup>(initialProductGroup);
+  const [groupTabs, setGroupTabs] = useState<ProductGroupSummary[]>([]);
   const [variant, setVariant] = useState<DoorFrameVariant>('34_MM');
   const [pervazProduct, setPervazProduct] =
     useState<PervazProduct>('AYARLI_PERVAZ');
@@ -135,6 +185,8 @@ export function CostCalculationPage() {
   const [notice, setNotice] = useState<string | null>(null);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [catalogDrawerOpen, setCatalogDrawerOpen] = useState(false);
+  const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -156,13 +208,26 @@ export function CostCalculationPage() {
   const [pricingMeta, setPricingMeta] = useState<
     ProductPricingSetting | AyarliPervazPricingSetting | null
   >(null);
+  const [productCardMarkupRate, setProductCardMarkupRate] = useState<string | null>(
+    null,
+  );
 
   const [priceEditRow, setPriceEditRow] = useState<DoorFrameMdfRow | null>(null);
   const [priceEditCash, setPriceEditCash] = useState('');
   const [priceEditReason, setPriceEditReason] = useState('');
   const [priceEditSaving, setPriceEditSaving] = useState(false);
   const [priceEditError, setPriceEditError] = useState<string | null>(null);
-  const [orderDrawerOpen, setOrderDrawerOpen] = useState(false);
+  const [dekoratifPremiums, setDekoratifPremiums] = useState<
+    DekoratifPervazPremiumItem[]
+  >([]);
+  const [dekoratifPremiumsError, setDekoratifPremiumsError] = useState<
+    string | null
+  >(null);
+  const [editingPremiumKey, setEditingPremiumKey] = useState<string | null>(
+    null,
+  );
+  const [premiumRateInput, setPremiumRateInput] = useState('');
+  const [premiumSaving, setPremiumSaving] = useState(false);
 
   const thicknesses = useMemo(
     () => (variant === '34_MM' ? (['22', '12'] as const) : (['18', '12'] as const)),
@@ -171,9 +236,13 @@ export function CostCalculationPage() {
   const activeExtraOrder =
     productGroup === 'PERVAZ' ? PERVAZ_EXTRA_ORDER : EXTRA_ORDER;
   const pervazProductLabel = PERVAZ_PRODUCT_META[pervazProduct].label;
-  const canEditPervazCardFixed =
+  const canEditPervazCardRate =
     productGroup === 'PERVAZ' &&
     (pervazProduct === 'AYARLI_PERVAZ' || pervazProduct === 'DEKORATIF_PERVAZ');
+  const canEditPervazDecorativePremium =
+    productGroup === 'PERVAZ' &&
+    (pervazProduct === 'DEKORATIF_PERVAZ' ||
+      pervazProduct === 'DEKORATIF_PERVAZ_GENIS_KILCIK');
 
   const pervazThicknesses = useMemo(
     () =>
@@ -220,11 +289,18 @@ export function CostCalculationPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetchDoorFrameMdfCosts(targetVariant);
+      const response = await fetchDoorFrameMdfCosts(
+        targetVariant,
+        materialPriceType,
+      );
       setData(response);
     } catch (err) {
       setData(null);
-      setError(err instanceof ApiError ? err.message : 'MDF maliyeti yüklenemedi.');
+      setError(
+        friendlyMaterialPriceError(
+          err instanceof ApiError ? err.message : 'MDF maliyeti yüklenemedi.',
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -236,17 +312,19 @@ export function CostCalculationPage() {
     try {
       setPervazData(
         pervazProduct === 'AYARLI_PERVAZ'
-          ? await fetchAyarliPervazMdfCosts()
+          ? await fetchAyarliPervazMdfCosts(materialPriceType)
           : pervazProduct === 'DEKORATIF_PERVAZ'
-            ? await fetchDekoratifPervazCosts()
-            : await fetchDekoratifGenisKilcikCosts(),
+            ? await fetchDekoratifPervazCosts(materialPriceType)
+            : await fetchDekoratifGenisKilcikCosts(materialPriceType),
       );
     } catch (err) {
       setPervazData(null);
       setError(
-        err instanceof ApiError
-          ? err.message
-          : 'Pervaz maliyetleri yüklenemedi.',
+        friendlyMaterialPriceError(
+          err instanceof ApiError
+            ? err.message
+            : 'Pervaz maliyetleri yüklenemedi.',
+        ),
       );
     } finally {
       setLoading(false);
@@ -261,49 +339,17 @@ export function CostCalculationPage() {
     setError(null);
     setData(null);
 
-    void fetchDoorFrameMdfCosts(variant)
+    void fetchDoorFrameMdfCosts(variant, materialPriceType)
       .then((response) => {
         if (!cancelled) setData(response);
       })
       .catch((err) => {
         if (!cancelled) {
           setData(null);
-          setError(err instanceof ApiError ? err.message : 'MDF maliyeti yüklenemedi.');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [productGroup, variant]);
-
-  useEffect(() => {
-    if (productGroup !== 'PERVAZ') return;
-
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setPervazData(null);
-    const request =
-      pervazProduct === 'AYARLI_PERVAZ'
-        ? fetchAyarliPervazMdfCosts()
-        : pervazProduct === 'DEKORATIF_PERVAZ'
-          ? fetchDekoratifPervazCosts()
-          : fetchDekoratifGenisKilcikCosts();
-    void request
-      .then((response) => {
-        if (!cancelled) setPervazData(response);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setPervazData(null);
           setError(
-            err instanceof ApiError
-              ? err.message
-              : 'Pervaz maliyetleri yüklenemedi.',
+            friendlyMaterialPriceError(
+              err instanceof ApiError ? err.message : 'MDF maliyeti yüklenemedi.',
+            ),
           );
         }
       })
@@ -314,7 +360,45 @@ export function CostCalculationPage() {
     return () => {
       cancelled = true;
     };
-  }, [productGroup, pervazProduct]);
+  }, [productGroup, variant, materialPriceType, catalogRefreshToken]);
+
+  useEffect(() => {
+    if (productGroup !== 'PERVAZ') return;
+
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setPervazData(null);
+    const request =
+      pervazProduct === 'AYARLI_PERVAZ'
+        ? fetchAyarliPervazMdfCosts(materialPriceType)
+        : pervazProduct === 'DEKORATIF_PERVAZ'
+          ? fetchDekoratifPervazCosts(materialPriceType)
+          : fetchDekoratifGenisKilcikCosts(materialPriceType);
+    void request
+      .then((response) => {
+        if (!cancelled) setPervazData(response);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setPervazData(null);
+          setError(
+            friendlyMaterialPriceError(
+              err instanceof ApiError
+                ? err.message
+                : 'Pervaz maliyetleri yüklenemedi.',
+            ),
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [productGroup, pervazProduct, materialPriceType, catalogRefreshToken]);
 
   useEffect(() => {
     setPervazQuery('');
@@ -322,24 +406,62 @@ export function CostCalculationPage() {
   }, [pervazProduct]);
 
   useEffect(() => {
+    if (!initialSettingsOpen) return;
+    if (productGroup !== 'door_frame' && productGroup !== 'PERVAZ') return;
+    void loadSettingsIntoDrawer();
+    // Sayfa bu grup için yeniden açıldığında bir kez doldurulur.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     if (!notice) return;
     const t = window.setTimeout(() => setNotice(null), 4000);
     return () => window.clearTimeout(t);
   }, [notice]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void listProductGroups()
+      .then((res) => {
+        if (cancelled) return;
+        const items = res.items.filter((g) => g.code !== 'KAPI_IMALATI');
+        setGroupTabs(items);
+        if (!items.some((g) => g.code === productGroup) && items[0]) {
+          setProductGroup(items[0].code);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setGroupTabs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // yalnız mount / kayıt sonrası
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [catalogRefreshToken]);
+
   const loadSettingsIntoDrawer = async () => {
     setSettingsLoading(true);
     setFormError(null);
+    setDekoratifPremiumsError(null);
+    setEditingPremiumKey(null);
+    setPremiumRateInput('');
     try {
-      const [extras, pricing] =
+      const [extras, pricing, premiums] =
         productGroup === 'PERVAZ'
           ? await Promise.all([
               listExtraCosts('PERVAZ'),
               getPervazPricingSetting(pervazProduct),
+              canEditPervazDecorativePremium
+                ? listDekoratifPervazPremiums(
+                    pervazProduct as DekoratifPervazPremiumProductCode,
+                  )
+                : Promise.resolve(null),
             ])
           : await Promise.all([
               listExtraCosts('door_frame'),
               getDoorFramePricingSetting(variant),
+              Promise.resolve(null),
             ]);
 
       const nextExtra: ExtraForm = emptyExtraForm();
@@ -353,7 +475,10 @@ export function CostCalculationPage() {
       const nextPricing = {
         vatRate: pricing.vatRate ?? '',
         profitRate: pricing.profitRate,
-        cardMarkupRate: pricing.cardMarkupRate ?? '',
+        cardMarkupRate:
+          'groupCardMarkupRate' in pricing
+            ? (pricing.groupCardMarkupRate ?? '')
+            : (pricing.cardMarkupRate ?? ''),
         cardFixedSurchargeAmount:
           productGroup === 'PERVAZ' &&
           'cardFixedSurchargeAmount' in pricing &&
@@ -364,6 +489,10 @@ export function CostCalculationPage() {
       setPricingBaseline(nextPricing);
       setPricingForm(nextPricing);
       setPricingMeta(pricing);
+      setProductCardMarkupRate(
+        'productCardMarkupRate' in pricing ? pricing.productCardMarkupRate : null,
+      );
+      setDekoratifPremiums(premiums?.items ?? []);
       setDrawerOpen(true);
     } catch (err) {
       setFormError(
@@ -372,6 +501,51 @@ export function CostCalculationPage() {
       setDrawerOpen(true);
     } finally {
       setSettingsLoading(false);
+    }
+  };
+
+  const premiumKey = (item: {
+    thicknessMm: number;
+    widthMm: number;
+    lengthMm: number;
+  }) => `${item.thicknessMm}-${item.widthMm}-${item.lengthMm}`;
+
+  const saveDekoratifPremium = async (item: DekoratifPervazPremiumItem) => {
+    if (!canEditPervazDecorativePremium) return;
+    const rate = normalizeDecimalInput(premiumRateInput);
+    if (!isValidDecimal(rate)) {
+      setDekoratifPremiumsError(
+        'Dekoratif fark oranı 0 veya daha büyük geçerli bir değer olmalıdır (örn. 50).',
+      );
+      return;
+    }
+
+    setPremiumSaving(true);
+    setDekoratifPremiumsError(null);
+    try {
+      const result = await updateDekoratifPervazPremium(
+        pervazProduct as DekoratifPervazPremiumProductCode,
+        {
+          thicknessMm: item.thicknessMm,
+          widthMm: item.widthMm,
+          lengthMm: item.lengthMm,
+          rate,
+        },
+      );
+      setDekoratifPremiums(result.items);
+      setEditingPremiumKey(null);
+      setPremiumRateInput('');
+      setNotice('Dekoratif fark kaydedildi. Tablo güncelleniyor…');
+      await reloadPervazCosts();
+      setNotice('Dekoratif fark uygulandı.');
+    } catch (err) {
+      setDekoratifPremiumsError(
+        err instanceof ApiError
+          ? err.message
+          : 'Dekoratif fark kaydedilemedi.',
+      );
+    } finally {
+      setPremiumSaving(false);
     }
   };
 
@@ -473,28 +647,15 @@ export function CostCalculationPage() {
       });
     }
     if (
-      productGroup === 'door_frame' &&
-      !amountsEqual(pricingForm.cardMarkupRate, pricingBaseline.cardMarkupRate)
+      (productGroup === 'door_frame' || canEditPervazCardRate) &&
+      !optionalAmountsEqual(pricingForm.cardMarkupRate, pricingBaseline.cardMarkupRate)
     ) {
       changes.push({
-        label: 'Kredi Kartı Farkı',
-        from: formatPercentRate(normalizeDecimalInput(pricingBaseline.cardMarkupRate)),
+        label: 'Kart / Taksit Farkı',
+        from: pricingBaseline.cardMarkupRate
+          ? formatPercentRate(normalizeDecimalInput(pricingBaseline.cardMarkupRate))
+          : '—',
         to: formatPercentRate(normalizeDecimalInput(pricingForm.cardMarkupRate)),
-      });
-    }
-    if (
-      canEditPervazCardFixed &&
-      !amountsEqual(
-        pricingForm.cardFixedSurchargeAmount,
-        pricingBaseline.cardFixedSurchargeAmount,
-      )
-    ) {
-      changes.push({
-        label: 'Kart/Taksit Sabit Farkı',
-        from: formatTry(
-          normalizeDecimalInput(pricingBaseline.cardFixedSurchargeAmount),
-        ),
-        to: formatTry(normalizeDecimalInput(pricingForm.cardFixedSurchargeAmount)),
       });
     }
     return changes;
@@ -505,7 +666,7 @@ export function CostCalculationPage() {
     pricingForm,
     pricingBaseline,
     productGroup,
-    canEditPervazCardFixed,
+    canEditPervazCardRate,
   ]);
 
   const onSaveSettings = async (event: FormEvent) => {
@@ -527,20 +688,19 @@ export function CostCalculationPage() {
     }
     const vat = normalizeDecimalInput(pricingForm.vatRate);
     const card = normalizeDecimalInput(pricingForm.cardMarkupRate);
-    if (productGroup === 'door_frame') {
-      if (!isValidDecimal(vat)) {
+    const cardChanged = !optionalAmountsEqual(
+      pricingForm.cardMarkupRate,
+      pricingBaseline.cardMarkupRate,
+    );
+    if (productGroup === 'door_frame' || canEditPervazCardRate) {
+      if (productGroup === 'door_frame' && !isValidDecimal(vat)) {
         setFormError('KDV oranı geçerli olmalıdır (örn. 0 veya 10).');
         return;
       }
-      if (!isValidDecimal(card)) {
-        setFormError('Kredi kartı farkı geçerli olmalıdır (örn. 20).');
+      if (cardChanged && !isValidDecimal(card)) {
+        setFormError('Kart / taksit farkı geçerli olmalıdır (örn. 20 veya 0).');
         return;
       }
-    }
-    const cardFixed = normalizeDecimalInput(pricingForm.cardFixedSurchargeAmount);
-    if (canEditPervazCardFixed && !isValidDecimal(cardFixed)) {
-      setFormError('Kart/taksit sabit farkı geçerli bir tutar olmalıdır (örn. 2).');
-      return;
     }
     if (pendingChanges.length === 0) {
       setFormError('Değişiklik yok.');
@@ -553,7 +713,7 @@ export function CostCalculationPage() {
       for (const code of activeExtraOrder) {
         if (amountsEqual(extraForm[code], extraBaseline[code])) continue;
         await updateExtraCostValue(code, {
-          productGroup,
+          productGroup: productGroup as 'door_frame' | 'PERVAZ',
           amount: normalizeDecimalInput(extraForm[code]),
           effectiveFrom,
         });
@@ -564,30 +724,33 @@ export function CostCalculationPage() {
           pricingForm.profitRate,
           pricingBaseline.profitRate,
         );
-        const cardFixedChanged =
-          canEditPervazCardFixed &&
-          !amountsEqual(
-            pricingForm.cardFixedSurchargeAmount,
-            pricingBaseline.cardFixedSurchargeAmount,
+        const cardRateChanged =
+          canEditPervazCardRate &&
+          !optionalAmountsEqual(
+            pricingForm.cardMarkupRate,
+            pricingBaseline.cardMarkupRate,
           );
-        if (profitChanged || cardFixedChanged) {
+        if (profitChanged || cardRateChanged) {
           await updatePervazPricingSetting(
             pervazProduct,
             profit,
-            cardFixedChanged ? cardFixed : undefined,
+            cardRateChanged ? card : undefined,
           );
         }
       } else {
-        if (
-          !amountsEqual(pricingForm.vatRate, pricingBaseline.vatRate) ||
-          !amountsEqual(pricingForm.profitRate, pricingBaseline.profitRate) ||
-          !amountsEqual(pricingForm.cardMarkupRate, pricingBaseline.cardMarkupRate)
-        ) {
+        const vatChanged = !amountsEqual(pricingForm.vatRate, pricingBaseline.vatRate);
+        const profitChanged = !amountsEqual(
+          pricingForm.profitRate,
+          pricingBaseline.profitRate,
+        );
+        if (cardChanged) {
+          await updateGroupCardMarkupRate('door_frame', card);
+        }
+        if (vatChanged || profitChanged) {
           await updateDoorFramePricingSetting(variant, {
             productGroup: 'door_frame',
             vatRate: vat,
             profitRate: profit,
-            cardMarkupRate: card,
           });
         }
       }
@@ -617,25 +780,68 @@ export function CostCalculationPage() {
             value={productGroup}
             onChange={(e) => setProductGroup(e.target.value as ProductGroup)}
           >
-            <option value="door_frame">Kapı Kasası</option>
-            <option value="PERVAZ">Pervaz</option>
-            <option value="SUPURGELIK">Süpürgelik</option>
-            <option value="CITA">Çıta</option>
+            {(groupTabs.length
+              ? groupTabs
+              : [
+                  { code: 'door_frame', name: 'Kapı Kasası' },
+                  { code: 'PERVAZ', name: 'Pervaz' },
+                  { code: 'SUPURGELIK', name: 'Süpürgelik' },
+                  { code: 'CITA', name: 'Çıta' },
+                ]
+            ).map((g) => (
+              <option key={g.code} value={g.code}>
+                {g.name}
+              </option>
+            ))}
           </select>
         </label>
+
+        <div className="cc-price-type" role="group" aria-label="MDF alış fiyatı">
+          <span>MDF Alış Fiyatı</span>
+          <div className="cc-price-type-options">
+            <button
+              type="button"
+              className={materialPriceType === 'CASH' ? 'active' : undefined}
+              aria-pressed={materialPriceType === 'CASH'}
+              onClick={() => onMaterialPriceTypeChange('CASH')}
+            >
+              Nakit (Peşin Alış)
+            </button>
+            <button
+              type="button"
+              className={
+                materialPriceType === 'CARD_INSTALLMENT' ? 'active' : undefined
+              }
+              aria-pressed={materialPriceType === 'CARD_INSTALLMENT'}
+              onClick={() => onMaterialPriceTypeChange('CARD_INSTALLMENT')}
+            >
+              Kart / Taksitli Alış
+            </button>
+          </div>
+        </div>
 
         <div className="cc-toolbar-actions">
           <button
             type="button"
-            className="cc-btn"
-            onClick={() => setOrderDrawerOpen(true)}
+            className="cc-btn cc-btn-primary"
+            onClick={() => setCatalogDrawerOpen(true)}
+            disabled={loading}
           >
-            Sipariş Maliyeti Hesapla
+            + Yeni Ürün / Ölçü Ekle
           </button>
+          {onOpenPriceList ? (
+            <button
+              type="button"
+              className="cc-btn"
+              onClick={onOpenPriceList}
+            >
+              Fiyat Listesi Oluştur
+            </button>
+          ) : null}
           {productGroup === 'door_frame' || productGroup === 'PERVAZ' ? (
             <button
               type="button"
-              className="cc-btn cc-btn-primary"
+              className="cc-btn"
               onClick={() => void loadSettingsIntoDrawer()}
               disabled={settingsLoading || loading}
             >
@@ -698,6 +904,10 @@ export function CostCalculationPage() {
             </button>
           </div>
 
+          <p className="cc-note">
+            Seçili MDF alış türü: {materialPriceTypeLabel(materialPriceType)}. İki
+            parça da bu türden hesaplanır.
+          </p>
           {notice ? <div className="cc-notice">{notice}</div> : null}
           {error ? <div className="cc-alert">{error}</div> : null}
 
@@ -767,24 +977,30 @@ export function CostCalculationPage() {
                         <span>Satış</span>
                       </span>
                     </th>
-                    <th rowSpan={2} className="cc-th-final">
-                      <span className="cc-th-stack">
-                        Hesaplanan
-                        <span>Nakit</span>
-                      </span>
-                    </th>
-                    <th rowSpan={2} className="cc-th-final">
-                      <span className="cc-th-stack">
-                        Yayınlanan
-                        <span>Nakit</span>
-                      </span>
-                    </th>
-                    <th rowSpan={2} className="cc-th-final">
-                      <span className="cc-th-stack">
-                        K.Kartı /
-                        <span>Taksitli</span>
-                      </span>
-                    </th>
+                    {showsCashSalePrice(materialPriceType) ? (
+                      <>
+                        <th rowSpan={2} className="cc-th-final">
+                          <span className="cc-th-stack">
+                            Hesaplanan
+                            <span>Nakit</span>
+                          </span>
+                        </th>
+                        <th rowSpan={2} className="cc-th-final">
+                          <span className="cc-th-stack">
+                            Yayınlanan
+                            <span>Nakit</span>
+                          </span>
+                        </th>
+                      </>
+                    ) : null}
+                    {showsCardSalePrice(materialPriceType) ? (
+                      <th rowSpan={2} className="cc-th-final">
+                        <span className="cc-th-stack">
+                          Kart /
+                          <span>Taksit Satış</span>
+                        </span>
+                      </th>
+                    ) : null}
                     <th rowSpan={2} className="cc-th-action">
                       {' '}
                     </th>
@@ -846,7 +1062,21 @@ export function CostCalculationPage() {
                             {formatTry(row.pricing.costWithVat)}
                           </span>
                         </td>
-                        <td className="cc-qty">{formatPercentRate(row.pricing.profitRate)}</td>
+                        <td className="cc-qty">
+                          <ProfitRateCell
+                            value={row.pricing.profitRate}
+                            payload={{
+                              productGroupCode: 'door_frame',
+                              productCode: variant,
+                              widthMm: row.widthCm * 10,
+                              lengthMm: row.lengthCm * 10,
+                            }}
+                            onSaved={(message) => {
+                              setNotice(message);
+                              setCatalogRefreshToken((n) => n + 1);
+                            }}
+                          />
+                        </td>
                         <td className="cc-money">{formatTry(row.pricing.profitAmount)}</td>
                         <td className="cc-money">
                           <span className="cc-badge cc-badge-pre">
@@ -858,27 +1088,46 @@ export function CostCalculationPage() {
                             {formatTry(row.pricing.roundedSalePrice)}
                           </span>
                         </td>
-                        <td className="cc-money">
-                          <span className="cc-badge cc-badge-cash">
-                            {formatTry(row.pricing.calculatedCashPrice ?? row.pricing.cashSalePrice)}
-                          </span>
-                        </td>
-                        <td className="cc-money">
-                          <span
-                            className={
-                              row.pricing.cashOverride
-                                ? 'cc-badge cc-badge-published'
-                                : 'cc-badge cc-badge-cash'
-                            }
-                          >
-                            {formatTry(row.pricing.publishedCashPrice ?? row.pricing.cashSalePrice)}
-                          </span>
-                        </td>
-                        <td className="cc-money">
-                          <span className="cc-badge cc-badge-card">
-                            {formatTry(row.pricing.publishedCardPrice ?? row.pricing.cardSalePrice)}
-                          </span>
-                        </td>
+                        {showsCashSalePrice(materialPriceType) ? (
+                          <>
+                            <td className="cc-money">
+                              <span className="cc-badge cc-badge-cash">
+                                {formatTry(
+                                  row.pricing.calculatedCashPrice ??
+                                    row.pricing.cashSalePrice,
+                                )}
+                              </span>
+                            </td>
+                            <td className="cc-money">
+                              <span
+                                className={
+                                  row.pricing.cashOverride
+                                    ? 'cc-badge cc-badge-published'
+                                    : 'cc-badge cc-badge-cash'
+                                }
+                              >
+                                {formatTry(
+                                  row.pricing.publishedCashPrice ??
+                                    row.pricing.cashSalePrice,
+                                )}
+                              </span>
+                            </td>
+                          </>
+                        ) : null}
+                        {showsCardSalePrice(materialPriceType) ? (
+                          <td className="cc-money">
+                            <span className="cc-badge cc-badge-card">
+                              {row.pricing.publishedCardPrice != null ||
+                              row.pricing.cardSalePrice != null
+                                ? formatTry(
+                                    row.pricing.publishedCardPrice ??
+                                      row.pricing.cardSalePrice,
+                                  )
+                                : (row.pricing.cardStatusMessage ??
+                                  'Kart/taksit oranı tanımlı değil')}
+                            </span>
+                          </td>
+                        ) : null}
                         <td className="cc-col-action">
                           <button
                             type="button"
@@ -906,6 +1155,10 @@ export function CostCalculationPage() {
                   <span className="cc-pervaz-eyebrow">Pervaz fiyat listesi</span>
                   <h2>{pervazProductLabel}</h2>
                   <p>{PERVAZ_PRODUCT_META[pervazProduct].description}</p>
+                  <p className="cc-note">
+                    Seçili MDF alış türü: {materialPriceTypeLabel(materialPriceType)}.
+                    Ana parça ve kılçık bu türden hesaplanır.
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -1039,16 +1292,68 @@ export function CostCalculationPage() {
                       ? 'ayarli'
                       : 'dekoratif'
                   }
+                  materialPriceType={materialPriceType}
                   rows={filteredPervazRows}
+                  onProfitSaved={(message) => {
+                    setNotice(message);
+                    void reloadPervazCosts();
+                  }}
                 />
               )}
             </div>
           </>
       ) : null}
 
-      {productGroup === 'SUPURGELIK' ? <SupurgelikCostList /> : null}
+      {productGroup === 'SUPURGELIK' ? (
+        <SupurgelikCostList
+          materialPriceType={materialPriceType}
+          initialSourceDrawer={initialSettingsOpen}
+          refreshToken={catalogRefreshToken}
+        />
+      ) : null}
 
-      {productGroup === 'CITA' ? <CitaCostList /> : null}
+      {productGroup === 'CITA' ? (
+        <CitaCostList
+          materialPriceType={materialPriceType}
+          initialSourceDrawer={initialSettingsOpen}
+          refreshToken={catalogRefreshToken}
+        />
+      ) : null}
+
+      {!SPECIAL_COST_GROUPS.has(productGroup) ? (
+        <GenericProductCostTable
+          productGroupCode={productGroup}
+          materialPriceType={materialPriceType}
+          refreshToken={catalogRefreshToken}
+          onChanged={(message) => {
+            setNotice(message);
+            setCatalogRefreshToken((n) => n + 1);
+          }}
+        />
+      ) : null}
+
+      <CatalogItemDrawer
+        open={catalogDrawerOpen}
+        defaultProductGroup={productGroup}
+        defaultProductCode={
+          productGroup === 'door_frame'
+            ? variant
+            : productGroup === 'PERVAZ'
+              ? pervazProduct
+              : productGroup === 'CITA'
+                ? 'CITA'
+                : productGroup === 'SUPURGELIK'
+                  ? 'DUZ_SUPURGELIK'
+                  : undefined
+        }
+        materialPriceType={materialPriceType}
+        onClose={() => setCatalogDrawerOpen(false)}
+        onSaved={(message, groupCode) => {
+          setNotice(message || 'Ürün / ölçü başarıyla eklendi.');
+          if (groupCode) setProductGroup(groupCode);
+          setCatalogRefreshToken((n) => n + 1);
+        }}
+      />
 
       {drawerOpen ? (
         <div className="cc-drawer-overlay" onClick={closeDrawer} role="presentation">
@@ -1079,7 +1384,8 @@ export function CostCalculationPage() {
                   <p className="cc-hint">
                     {productGroup === 'PERVAZ'
                       ? 'Kesim, tutkal ve işçilik tüm Pervaz hesaplarında ortak kullanılır.'
-                      : '34 MM ve 30 MM aynı değerleri kullanır.'}
+                      : '34 MM ve 30 MM aynı değerleri kullanır.'}{' '}
+                    MDF alış fiyatları Ham Maddeler ekranından düzenlenir.
                   </p>
                   {activeExtraOrder.map((code) => (
                     <label key={code} className="cc-field">
@@ -1109,9 +1415,9 @@ export function CostCalculationPage() {
                       (productGroup === 'PERVAZ' ? pervazProductLabel : variant)}
                     {' — '}
                     {productGroup === 'PERVAZ'
-                      ? pervazProduct !== 'AYARLI_PERVAZ'
-                        ? 'dekoratif fark oranları bu ekranda değiştirilmez.'
-                        : 'özel satır oranları değiştirilmez.'
+                      ? pervazProduct === 'AYARLI_PERVAZ'
+                        ? 'özel satır oranları değiştirilmez.'
+                        : 'dekoratif fark oranları aşağıdan düzenlenir.'
                       : 'yalnızca seçili kasa etkilenir.'}
                   </p>
                   {productGroup === 'door_frame' ? (
@@ -1145,9 +1451,9 @@ export function CostCalculationPage() {
                       inputMode="decimal"
                     />
                   </label>
-                  {productGroup === 'door_frame' ? (
+                  {productGroup === 'door_frame' || canEditPervazCardRate ? (
                     <label className="cc-field">
-                      <span>Kredi Kartı Farkı (%)</span>
+                      <span>Grup kart oranı (%)</span>
                       <input
                         className="cc-input"
                         value={pricingForm.cardMarkupRate}
@@ -1158,23 +1464,16 @@ export function CostCalculationPage() {
                           }))
                         }
                         inputMode="decimal"
+                        placeholder="Tanımlı değil"
                       />
-                    </label>
-                  ) : null}
-                  {canEditPervazCardFixed ? (
-                    <label className="cc-field">
-                      <span>Kart/Taksit Sabit Farkı (TL)</span>
-                      <input
-                        className="cc-input"
-                        value={pricingForm.cardFixedSurchargeAmount}
-                        onChange={(e) =>
-                          setPricingForm((prev) => ({
-                            ...prev,
-                            cardFixedSurchargeAmount: e.target.value,
-                          }))
-                        }
-                        inputMode="decimal"
-                      />
+                      {productGroup === 'door_frame' &&
+                      pricingForm.cardMarkupRate.trim() === '' &&
+                      productCardMarkupRate ? (
+                        <span className="cc-hint">
+                          Grup kart oranı: Tanımlı değil. Mevcut hesaplama: Ürün oranı{' '}
+                          {formatPercentRate(productCardMarkupRate)}
+                        </span>
+                      ) : null}
                     </label>
                   ) : null}
                   {productGroup === 'PERVAZ' &&
@@ -1182,6 +1481,101 @@ export function CostCalculationPage() {
                     <p className="cc-hint">Bu ürün için kart fiyatı yok.</p>
                   ) : null}
                 </section>
+
+                {canEditPervazDecorativePremium ? (
+                  <section className="cc-form-section">
+                    <h3>Dekoratif Maliyetler</h3>
+                    <p className="cc-hint">
+                      Satır bazlı dekoratif fark oranı. Ayarlı Pervaz etkilenmez.
+                    </p>
+                    {dekoratifPremiumsError ? (
+                      <div className="cc-alert">{dekoratifPremiumsError}</div>
+                    ) : null}
+                    {dekoratifPremiums.length === 0 ? (
+                      <p className="cc-hint">Bu ürün için ölçü bulunamadı.</p>
+                    ) : (
+                      <div className="cc-supurgelik-source-list">
+                        {dekoratifPremiums.map((item) => {
+                          const key = premiumKey(item);
+                          const editing = editingPremiumKey === key;
+                          return (
+                            <div className="cc-supurgelik-source-row" key={key}>
+                              <div className="cc-supurgelik-source-material">
+                                <strong>{item.thicknessMm} mm</strong>
+                                <span>
+                                  {formatPieceSizeCm(item.widthMm, item.lengthMm)}
+                                </span>
+                              </div>
+                              {editing ? (
+                                <div className="cc-supurgelik-source-edit">
+                                  <label className="cc-field">
+                                    <span>Dekoratif fark (%)</span>
+                                    <input
+                                      className="cc-input"
+                                      inputMode="decimal"
+                                      autoFocus
+                                      value={premiumRateInput}
+                                      onChange={(event) =>
+                                        setPremiumRateInput(event.target.value)
+                                      }
+                                      placeholder="50"
+                                      disabled={premiumSaving}
+                                    />
+                                  </label>
+                                  <div className="cc-supurgelik-source-edit-actions">
+                                    <button
+                                      type="button"
+                                      className="cc-btn cc-btn-sm"
+                                      onClick={() => {
+                                        setEditingPremiumKey(null);
+                                        setPremiumRateInput('');
+                                        setDekoratifPremiumsError(null);
+                                      }}
+                                      disabled={premiumSaving}
+                                    >
+                                      İptal
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="cc-btn cc-btn-primary cc-btn-sm"
+                                      onClick={() => void saveDekoratifPremium(item)}
+                                      disabled={premiumSaving}
+                                    >
+                                      {premiumSaving ? 'Kaydediliyor…' : 'Kaydet'}
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="cc-supurgelik-source-price">
+                                  <span>Mevcut Oran</span>
+                                  {item.rate == null ? (
+                                    <strong className="missing">
+                                      Tanımlı değil
+                                    </strong>
+                                  ) : (
+                                    <strong>{formatPercentRate(item.rate)}</strong>
+                                  )}
+                                  <button
+                                    type="button"
+                                    className="cc-btn cc-btn-sm"
+                                    onClick={() => {
+                                      setEditingPremiumKey(key);
+                                      setPremiumRateInput(item.rate ?? '');
+                                      setDekoratifPremiumsError(null);
+                                    }}
+                                    disabled={saving || premiumSaving}
+                                  >
+                                    {item.rate == null ? 'Değer Gir' : 'Düzenle'}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </section>
+                ) : null}
 
                 {pendingChanges.length > 0 ? (
                   <div className="cc-summary">
@@ -1263,7 +1657,7 @@ export function CostCalculationPage() {
                   />
                 </label>
                 <label className="cc-field">
-                  <span>Değişiklik Sebebi (opsiyonel)</span>
+                  <span>Değişiklik Sebebi (isteğe bağlı)</span>
                   <input
                     className="cc-input"
                     value={priceEditReason}
@@ -1307,9 +1701,6 @@ export function CostCalculationPage() {
         </div>
       ) : null}
 
-      {orderDrawerOpen ? (
-        <OrderCostDrawer onClose={() => setOrderDrawerOpen(false)} />
-      ) : null}
     </section>
   );
 }

@@ -66,3 +66,18 @@ export function formatDateTr(iso: string | null | undefined): string {
   const yyyy = d.getUTCFullYear();
   return `${dd}.${mm}.${yyyy}`;
 }
+
+/** Fiyat listesi gösterimi. Hesap yapmaz. "325.00" → "325 TL" */
+export function formatListTl(value: string | null | undefined): string {
+  if (value == null || value === '') return '—';
+  const negative = value.startsWith('-');
+  const raw = negative ? value.slice(1) : value;
+  const [intPartRaw, fracRaw = ''] = raw.split('.');
+  const intPart = intPartRaw.replace(/^0+(?=\d)/, '') || '0';
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const fracTrim = fracRaw.replace(/0+$/, '');
+  if (!fracTrim) {
+    return `${negative ? '-' : ''}${grouped} TL`;
+  }
+  return `${negative ? '-' : ''}${grouped},${fracTrim} TL`;
+}

@@ -4,6 +4,7 @@ import {
   SUPURGELIK_PRODUCT_CODES,
   type SupurgelikProductCode,
 } from '../../../calculation-engine/calculators/supurgelik-mdf-calculator';
+import { MaterialPriceTypeQueryDto } from './material-price-type-query.dto';
 
 function toPositiveInt(value: unknown): unknown {
   if (value === undefined || value === null || value === '') {
@@ -13,7 +14,7 @@ function toPositiveInt(value: unknown): unknown {
 }
 
 /** GET /cost-calculation/supurgelik/mdf — internal ölçüler mm. */
-export class SupurgelikMdfQueryDto {
+export class SupurgelikMdfQueryDto extends MaterialPriceTypeQueryDto {
   @IsNotEmpty({ message: 'productCode zorunludur.' })
   @IsIn(SUPURGELIK_PRODUCT_CODES, {
     message: 'productCode geçerli bir Süpürgelik ürünü olmalıdır.',

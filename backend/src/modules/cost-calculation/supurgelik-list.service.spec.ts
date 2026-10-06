@@ -143,6 +143,7 @@ function buildService(
     },
     productSize: {
       findMany: jest.fn().mockResolvedValue(productSizes),
+      findUnique: jest.fn().mockResolvedValue(null),
     },
     productionYield: {
       findMany: jest.fn().mockImplementation(({ where }) => {
@@ -165,15 +166,53 @@ function buildService(
       }),
     },
     pricingSetting: {
-      findMany: jest.fn().mockResolvedValue([
-        {
-          id: 'pricing-supurgelik',
-          productGroupId: 'group-supurgelik',
-          productId: null,
-          profitRate: new Decimal('20'),
-          isActive: true,
+      findMany: jest.fn().mockImplementation(
+        ({
+          where,
+        }: {
+          where?: {
+            productId?: string | null;
+            productGroupId?: string | null;
+            isActive?: boolean;
+          };
+        }) => {
+          const rows = [
+            {
+              id: 'pricing-supurgelik',
+              productGroupId: 'group-supurgelik',
+              productId: null as string | null,
+              profitRate: new Decimal('20'),
+              isActive: true,
+            },
+          ];
+          return Promise.resolve(
+            rows.filter((row) => {
+              if (where?.isActive === true && !row.isActive) return false;
+              if (where && 'productId' in where) {
+                if (where.productId == null && row.productId != null) return false;
+                if (where.productId != null && row.productId !== where.productId) {
+                  return false;
+                }
+              }
+              if (where && 'productGroupId' in where) {
+                if (where.productGroupId == null && row.productGroupId != null) {
+                  return false;
+                }
+                if (
+                  where.productGroupId != null &&
+                  row.productGroupId !== where.productGroupId
+                ) {
+                  return false;
+                }
+              }
+              return true;
+            }),
+          );
         },
-      ]),
+      ),
+    },
+    productPricingOverride: {
+      findMany: jest.fn().mockResolvedValue([]),
     },
     pricingThicknessModifier: {
       findMany: jest.fn().mockResolvedValue([
@@ -258,7 +297,7 @@ describe('CostCalculationService.getSupurgelikMdfCosts', () => {
       expect(result.rows.every((row) => row.productCode === productCode)).toBe(true);
       expect(result.rows.every((row) => row.extraCostsTotal === '16')).toBe(true);
       expect(result.rows.every((row) => 'pricing' in row)).toBe(true);
-      expect(prisma.pricingSetting.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.pricingSetting.findMany).toHaveBeenCalledTimes(4);
       if (productCode === 'DEKORATIF_SUPURGELIK' || productCode === 'DEKORATIF_PP_SARMA_SUPURGELIK') {
         expect(prisma.pricingThicknessModifier.findMany).toHaveBeenCalledTimes(1);
       } else {

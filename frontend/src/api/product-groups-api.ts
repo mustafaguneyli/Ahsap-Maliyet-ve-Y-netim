@@ -11,6 +11,7 @@ export type ProductGroupSummary = {
   id: string;
   code: string;
   name: string;
+  calculatorType: string;
   isActive: boolean;
   activeProductCount: number;
   products: ProductGroupProduct[];

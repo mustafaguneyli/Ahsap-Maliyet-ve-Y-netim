@@ -18,7 +18,7 @@ export class PricingThicknessModifiersController {
   }
 
   /**
-   * Eski aktif kaydı kapatır; yalnız 12/14/18 mm için yeni dekoratif oran sürümü açar.
+   * Eski aktif kaydı kapatır; SUPURGELIK grup + kalınlık dekoratif oranı sürümü açar.
    * PATCH /pricing-thickness-modifiers
    */
   @Patch()

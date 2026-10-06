@@ -59,7 +59,7 @@ export class CalculationEngine {
     extraCosts: DoorFrameExtraCostsInput,
     vatRate: string,
     profitRate: string,
-    cardMarkupRate: string,
+    cardMarkupRate: string | null,
   ): DoorFrameSizeCostPricedResult[] {
     return this.doorFrameCalculator.calculateCostsWithProfit(
       sizes,

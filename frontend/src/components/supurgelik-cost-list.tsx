@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import {
   fetchSupurgelikCosts,
   SUPURGELIK_PRODUCT_CODES,
@@ -10,8 +10,17 @@ import {
 import {
   listRawMaterials,
   RawMaterial,
-  updateRawMaterialCardInstallmentPrice,
 } from '../api/raw-materials-api';
+import { saveChangedPurchasePrices } from '../lib/material-purchase-prices';
+import {
+  friendlyMaterialPriceError,
+  materialPriceTypeLabel,
+  missingPurchasePriceLabel,
+  salePriceResultLabel,
+  showsCardSalePrice,
+  showsCashSalePrice,
+  type MaterialPriceType,
+} from '../lib/material-price-type';
 import {
   ExtraCostItem,
   getSupurgelikPpWrapping,
@@ -27,12 +36,12 @@ import {
   listSupurgelikDecorativeRates,
   selectSupurgelikDecorativeRates,
   SupurgelikDecorativeRateItem,
-  SupurgelikDecorativeRateThickness,
   updateSupurgelikDecorativeRate,
 } from '../api/pricing-thickness-modifiers-api';
 import { ApiError } from '../lib/api';
 import { formatPieceSizeCm, formatSheetSizeCm } from '../lib/length';
 import { formatPercentRate, formatTryTwoDecimals } from '../lib/money';
+import { ProfitRateCell } from './profit-rate-cell';
 
 const PRODUCT_META: Record<
   SupurgelikProductCode,
@@ -62,7 +71,7 @@ const PRODUCT_META: Record<
 
 const STATUS_LABELS: Record<SupurgelikRowErrorCode, string> = {
   RAW_MATERIAL_PRICE_MISSING: 'MDF fiyatı eksik',
-  DECORATIVE_RATE_MISSING: 'Dekoratif oran tanımlı değil',
+  DECORATIVE_RATE_MISSING: 'Dekoratif maliyet oranı tanımlı değil',
   PP_WRAPPING_COST_MISSING: 'PP sarma maliyeti tanımlı değil',
 };
 
@@ -86,6 +95,11 @@ function isPositiveDecimalInput(value: string): boolean {
     /^\d+(\.\d{1,4})?$/.test(normalized) &&
     !/^0+(\.0+)?$/.test(normalized)
   );
+}
+
+function isNonNegativeDecimalInput(value: string): boolean {
+  const normalized = normalizeDecimalInput(value);
+  return /^\d+(\.\d{1,4})?$/.test(normalized);
 }
 
 function todayIsoDate(): string {
@@ -125,17 +139,38 @@ export function selectSupurgelikRawMaterials(
     );
 }
 
-function StatusBadge({ row }: { row: SupurgelikCostRow }) {
+function StatusBadge({
+  row,
+  materialPriceType,
+}: {
+  row: SupurgelikCostRow;
+  materialPriceType: MaterialPriceType;
+}) {
   if (!row.errorCode) return <span className="cc-supurgelik-no-status">—</span>;
+
+  const label =
+    row.errorCode === 'RAW_MATERIAL_PRICE_MISSING'
+      ? missingPurchasePriceLabel(
+          `${row.thicknessMm} mm ${formatSheetSizeCm(
+            row.rawMaterial.sheetWidthMm,
+            row.rawMaterial.sheetLengthMm,
+          )} MDF`,
+          row.materialPriceType ?? materialPriceType,
+        )
+      : STATUS_LABELS[row.errorCode];
 
   return (
     <span
       className={`cc-supurgelik-status cc-supurgelik-status-${row.errorCode.toLocaleLowerCase(
         'tr-TR',
       )}`}
-      title={row.errorMessage ?? STATUS_LABELS[row.errorCode]}
+      title={
+        row.errorCode === 'RAW_MATERIAL_PRICE_MISSING'
+          ? label
+          : (row.errorMessage ?? label)
+      }
     >
-      {STATUS_LABELS[row.errorCode]}
+      {label}
     </span>
   );
 }
@@ -163,14 +198,36 @@ function PublishedPriceCell({ row }: { row: SupurgelikCostRow }) {
   );
 }
 
+function PublishedCardCell({ row }: { row: SupurgelikCostRow }) {
+  if (row.pricing.publishedCashPrice == null) return <>—</>;
+  if (row.pricing.publishedCardPrice != null) {
+    return (
+      <span className="cc-badge cc-badge-card">
+        {formatTryTwoDecimals(row.pricing.publishedCardPrice)}
+      </span>
+    );
+  }
+  return (
+    <span className="cc-card-unavailable">
+      {row.pricing.cardStatusMessage ?? 'Kart/taksit oranı tanımlı değil'}
+    </span>
+  );
+}
+
 function SupurgelikTable({
   rows,
   productCode,
+  materialPriceType,
+  onProfitSaved,
 }: {
   rows: SupurgelikCostRow[];
   productCode: SupurgelikProductCode;
+  materialPriceType: MaterialPriceType;
+  onProfitSaved?: (message: string) => void;
 }) {
   const decorative = isDecorativeProduct(productCode);
+  const showCash = showsCashSalePrice(materialPriceType);
+  const showCard = showsCardSalePrice(materialPriceType);
 
   return (
     <table className="cc-table cc-supurgelik-table">
@@ -186,8 +243,8 @@ function SupurgelikTable({
           <th>Kâr %</th>
           <th>Kâr Tutarı</th>
           {decorative ? <th>Dekoratif %</th> : null}
-          {decorative ? <th>Baz Nakit</th> : null}
-          <th>{decorative ? 'Dekoratif Nakit' : 'Nakit Satış'}</th>
+          {decorative && showCash ? <th>Baz Nakit</th> : null}
+          <th>{salePriceResultLabel(materialPriceType)}</th>
           <th>Durum</th>
         </tr>
       </thead>
@@ -234,7 +291,18 @@ function SupurgelikTable({
                   </span>
                 )}
               </td>
-              <td className="cc-qty">{formatPercentRate(row.pricing.profitRate)}</td>
+              <td className="cc-qty">
+                <ProfitRateCell
+                  value={row.pricing.profitRate}
+                  payload={{
+                    productGroupCode: 'SUPURGELIK',
+                    productCode,
+                    widthMm: row.widthMm,
+                    lengthMm: row.lengthMm,
+                  }}
+                  onSaved={onProfitSaved}
+                />
+              </td>
               <td className="cc-money">
                 {formatTryTwoDecimals(row.pricing.profitAmount)}
               </td>
@@ -243,7 +311,7 @@ function SupurgelikTable({
                   {formatPercentRate(row.pricing.decorativeRate)}
                 </td>
               ) : null}
-              {decorative ? (
+              {decorative && showCash ? (
                 <td className="cc-money">
                   {row.pricing.basePublishedCashPrice == null ? (
                     '—'
@@ -255,13 +323,17 @@ function SupurgelikTable({
                 </td>
               ) : null}
               <td className="cc-money cc-supurgelik-price-col">
-                <PublishedPriceCell row={row} />
+                {showCash ? (
+                  <PublishedPriceCell row={row} />
+                ) : showCard ? (
+                  <PublishedCardCell row={row} />
+                ) : null}
               </td>
               <td className="cc-supurgelik-status-cell">
                 {wrappingMissingInPriceCell ? (
                   <span className="cc-supurgelik-no-status">—</span>
                 ) : (
-                  <StatusBadge row={row} />
+                  <StatusBadge row={row} materialPriceType={materialPriceType} />
                 )}
               </td>
             </tr>
@@ -272,7 +344,17 @@ function SupurgelikTable({
   );
 }
 
-export function SupurgelikCostList() {
+export function SupurgelikCostList({
+  materialPriceType,
+  initialSourceDrawer = false,
+  onSourcesChanged,
+  refreshToken = 0,
+}: {
+  materialPriceType: MaterialPriceType;
+  initialSourceDrawer?: boolean;
+  onSourcesChanged?: () => void;
+  refreshToken?: number;
+}) {
   const [productCode, setProductCode] =
     useState<SupurgelikProductCode>('DUZ_SUPURGELIK');
   const [data, setData] = useState<SupurgelikCostsResponse | null>(null);
@@ -285,6 +367,7 @@ export function SupurgelikCostList() {
   const [sourceError, setSourceError] = useState<string | null>(null);
   const [sourceNotice, setSourceNotice] = useState<string | null>(null);
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
+  const [mdfCashInput, setMdfCashInput] = useState('');
   const [priceInput, setPriceInput] = useState('');
   const [sourceSaving, setSourceSaving] = useState(false);
   const [sourceExtraCosts, setSourceExtraCosts] = useState<ExtraCostItem[]>([]);
@@ -301,6 +384,9 @@ export function SupurgelikCostList() {
   const [editingProfitRate, setEditingProfitRate] = useState(false);
   const [profitRateInput, setProfitRateInput] = useState('');
   const [profitRateSaving, setProfitRateSaving] = useState(false);
+  const [editingCardMarkupRate, setEditingCardMarkupRate] = useState(false);
+  const [cardMarkupRateInput, setCardMarkupRateInput] = useState('');
+  const [cardMarkupRateSaving, setCardMarkupRateSaving] = useState(false);
   const [sourceDecorativeRates, setSourceDecorativeRates] = useState<
     SupurgelikDecorativeRateItem[]
   >([]);
@@ -310,7 +396,7 @@ export function SupurgelikCostList() {
     string | null
   >(null);
   const [editingDecorativeThicknessMm, setEditingDecorativeThicknessMm] =
-    useState<SupurgelikDecorativeRateThickness | null>(null);
+    useState<number | null>(null);
   const [decorativeRateInput, setDecorativeRateInput] = useState('');
   const [decorativeRateSaving, setDecorativeRateSaving] = useState(false);
   const [sourcePpWrapping, setSourcePpWrapping] = useState<ExtraCostItem | null>(
@@ -326,6 +412,7 @@ export function SupurgelikCostList() {
     sourceSaving ||
     extraCostSaving ||
     profitRateSaving ||
+    cardMarkupRateSaving ||
     decorativeRateSaving ||
     ppWrappingSaving;
 
@@ -335,16 +422,18 @@ export function SupurgelikCostList() {
     setError(null);
     setData(null);
 
-    void fetchSupurgelikCosts(productCode)
+    void fetchSupurgelikCosts(productCode, materialPriceType)
       .then((response) => {
         if (!cancelled) setData(response);
       })
       .catch((requestError) => {
         if (cancelled) return;
         setError(
-          requestError instanceof ApiError
-            ? requestError.message
-            : 'Süpürgelik maliyetleri yüklenemedi.',
+          friendlyMaterialPriceError(
+            requestError instanceof ApiError
+              ? requestError.message
+              : 'Süpürgelik maliyetleri yüklenemedi.',
+          ),
         );
       })
       .finally(() => {
@@ -354,7 +443,7 @@ export function SupurgelikCostList() {
     return () => {
       cancelled = true;
     };
-  }, [productCode, requestVersion]);
+  }, [productCode, requestVersion, materialPriceType, refreshToken]);
 
   const loadSourceMaterials = async (
     costData: SupurgelikCostsResponse | null = data,
@@ -477,6 +566,15 @@ export function SupurgelikCostList() {
     void loadSourcePpWrapping();
   };
 
+  const openedInitialDrawer = useRef(false);
+  useEffect(() => {
+    if (!initialSourceDrawer || !data || openedInitialDrawer.current) return;
+    openedInitialDrawer.current = true;
+    openSourceDrawer();
+    // Liste hazır olunca kaynak çekmecesini bir kez açar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSourceDrawer, data]);
+
   const closeSourceDrawer = () => {
     if (sourceBusy) return;
     setSourceDrawerOpen(false);
@@ -516,7 +614,7 @@ export function SupurgelikCostList() {
 
   const startDecorativeRateEdit = (item: SupurgelikDecorativeRateItem) => {
     setEditingDecorativeThicknessMm(item.thicknessMm);
-    setDecorativeRateInput(item.rate);
+    setDecorativeRateInput(item.rate ?? '');
     setSourceDecorativeRatesError(null);
     setSourceNotice(null);
   };
@@ -524,9 +622,9 @@ export function SupurgelikCostList() {
   const saveDecorativeRate = async (event: FormEvent) => {
     event.preventDefault();
     if (editingDecorativeThicknessMm == null) return;
-    if (!isPositiveDecimalInput(decorativeRateInput)) {
+    if (!isNonNegativeDecimalInput(decorativeRateInput)) {
       setSourceDecorativeRatesError(
-        'Dekoratif oran 0’dan büyük geçerli bir değer olmalıdır (örn. 25).',
+        'Dekoratif oran 0 veya daha büyük geçerli bir değer olmalıdır (örn. 25).',
       );
       return;
     }
@@ -543,6 +641,7 @@ export function SupurgelikCostList() {
       setEditingDecorativeThicknessMm(null);
       setDecorativeRateInput('');
       setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
       await loadSourceDecorativeRates();
     } catch (requestError) {
       setSourceDecorativeRatesError(
@@ -576,6 +675,7 @@ export function SupurgelikCostList() {
       setSourceNotice('PP sarma maliyeti kaydedildi.');
       setPpWrappingAmountInput('');
       setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
       await loadSourcePpWrapping();
     } catch (requestError) {
       setSourcePpWrappingError(
@@ -608,6 +708,7 @@ export function SupurgelikCostList() {
       setEditingProfitRate(false);
       setProfitRateInput('');
       setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
       await loadSourcePricing();
     } catch (requestError) {
       setSourcePricingError(
@@ -617,6 +718,44 @@ export function SupurgelikCostList() {
       );
     } finally {
       setProfitRateSaving(false);
+    }
+  };
+
+  const saveCardMarkupRate = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!isNonNegativeDecimalInput(cardMarkupRateInput)) {
+      setSourcePricingError(
+        'Kart / taksit farkı 0 veya daha büyük geçerli bir değer olmalıdır (örn. 20).',
+      );
+      return;
+    }
+    if (sourcePricing == null) {
+      setSourcePricingError('Kart oranı kaydı için önce kâr oranı yüklenmelidir.');
+      return;
+    }
+
+    setCardMarkupRateSaving(true);
+    setSourcePricingError(null);
+    try {
+      const result = await updateSupurgelikPricingSetting(
+        sourcePricing.profitRate,
+        normalizeDecimalInput(cardMarkupRateInput),
+      );
+      setSourcePricing(result);
+      setSourceNotice('Kart / taksit oranı kaydedildi.');
+      setEditingCardMarkupRate(false);
+      setCardMarkupRateInput('');
+      setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
+      await loadSourcePricing();
+    } catch (requestError) {
+      setSourcePricingError(
+        requestError instanceof ApiError
+          ? requestError.message
+          : 'Kart / taksit oranı kaydedilemedi.',
+      );
+    } finally {
+      setCardMarkupRateSaving(false);
     }
   };
 
@@ -646,6 +785,7 @@ export function SupurgelikCostList() {
       setEditingExtraCostCode(null);
       setExtraCostAmountInput('');
       setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
       await loadSourceExtraCosts();
     } catch (requestError) {
       setSourceExtraCostsError(
@@ -660,43 +800,37 @@ export function SupurgelikCostList() {
 
   const startPriceEdit = (material: RawMaterial) => {
     setEditingMaterialId(material.id);
+    setMdfCashInput(material.cashPrice ?? '');
     setPriceInput(material.cardInstallmentPrice ?? '');
     setSourceError(null);
     setSourceNotice(null);
   };
 
-  const saveCardInstallmentPrice = async (event: FormEvent) => {
+  const savePurchasePrices = async (event: FormEvent) => {
     event.preventDefault();
     const material = sourceMaterials.find((item) => item.id === editingMaterialId);
     if (!material) return;
 
-    if (!isPositiveDecimalInput(priceInput)) {
-      setSourceError(
-        'Kart / Taksit fiyatı 0’dan büyük geçerli bir tutar olmalıdır (örn. 1900).',
-      );
-      return;
-    }
-
     setSourceSaving(true);
     setSourceError(null);
     try {
-      const result = await updateRawMaterialCardInstallmentPrice(material.id, {
-        price: normalizeDecimalInput(priceInput),
-      });
-      setSourceNotice(
-        result.changed
-          ? `${material.thicknessMm} mm Kart / Taksit fiyatı güncellendi.`
-          : 'Fiyat değişmedi; yeni geçmiş kaydı oluşturulmadı.',
+      const result = await saveChangedPurchasePrices(
+        material,
+        mdfCashInput,
+        priceInput,
       );
+      setSourceNotice(result.message);
       setEditingMaterialId(null);
+      setMdfCashInput('');
       setPriceInput('');
       setRequestVersion((version) => version + 1);
+      onSourcesChanged?.();
       await loadSourceMaterials(data);
     } catch (requestError) {
       setSourceError(
-        requestError instanceof ApiError
+        requestError instanceof Error
           ? requestError.message
-          : 'Kart / Taksit fiyatı kaydedilemedi.',
+          : 'MDF alış fiyatı kaydedilemedi.',
       );
     } finally {
       setSourceSaving(false);
@@ -735,6 +869,10 @@ export function SupurgelikCostList() {
           <span className="cc-supurgelik-eyebrow">Süpürgelik fiyat listesi</span>
           <h2>{data?.productName ?? meta.label}</h2>
           <p>{meta.description}</p>
+          <p className="cc-note">
+            Seçili MDF alış türü: {materialPriceTypeLabel(materialPriceType)}. Dört
+            varyant da bu türü kullanır.
+          </p>
         </div>
         <div className="cc-supurgelik-heading-actions">
           <button
@@ -795,7 +933,12 @@ export function SupurgelikCostList() {
             </button>
           </div>
         ) : (
-          <SupurgelikTable rows={data.rows} productCode={productCode} />
+          <SupurgelikTable
+            rows={data.rows}
+            productCode={productCode}
+            materialPriceType={materialPriceType}
+            onProfitSaved={() => setRequestVersion((version) => version + 1)}
+          />
         )}
       </div>
 
@@ -832,7 +975,7 @@ export function SupurgelikCostList() {
             <div className="cc-supurgelik-source-body">
               <div className="cc-supurgelik-source-section-heading">
                 <span>Ham MDF Fiyatları</span>
-                <small>Kart / taksit alış fiyatı</small>
+                <small>Nakit ve kart / taksitli alış</small>
               </div>
 
               {sourceNotice ? <div className="cc-notice">{sourceNotice}</div> : null}
@@ -873,17 +1016,26 @@ export function SupurgelikCostList() {
                         {editing ? (
                           <form
                             className="cc-supurgelik-source-edit"
-                            onSubmit={(event) => void saveCardInstallmentPrice(event)}
+                            onSubmit={(event) => void savePurchasePrices(event)}
                           >
                             <label className="cc-field">
-                              <span>Kart / Taksit Ham MDF Fiyatı</span>
+                              <span>Nakit MDF Alış Fiyatı</span>
                               <input
                                 className="cc-input"
                                 inputMode="decimal"
                                 autoFocus
+                                value={mdfCashInput}
+                                onChange={(event) => setMdfCashInput(event.target.value)}
+                                disabled={sourceSaving}
+                              />
+                            </label>
+                            <label className="cc-field">
+                              <span>Kart / Taksitli MDF Alış Fiyatı</span>
+                              <input
+                                className="cc-input"
+                                inputMode="decimal"
                                 value={priceInput}
                                 onChange={(event) => setPriceInput(event.target.value)}
-                                placeholder="1900.00"
                                 disabled={sourceSaving}
                               />
                             </label>
@@ -893,6 +1045,7 @@ export function SupurgelikCostList() {
                                 className="cc-btn cc-btn-sm"
                                 onClick={() => {
                                   setEditingMaterialId(null);
+                                  setMdfCashInput('');
                                   setPriceInput('');
                                   setSourceError(null);
                                 }}
@@ -910,25 +1063,32 @@ export function SupurgelikCostList() {
                             </div>
                           </form>
                         ) : (
-                          <div className="cc-supurgelik-source-price">
-                            <span>Kart / Taksit Fiyatı</span>
-                            {material.cardInstallmentPrice == null ? (
-                              <strong className="missing">Tanımlı değil</strong>
-                            ) : (
-                              <strong>
-                                {formatTryTwoDecimals(
-                                  material.cardInstallmentPrice,
-                                )}
-                              </strong>
-                            )}
+                          <div className="cc-supurgelik-source-prices">
+                            <div className="cc-supurgelik-source-price">
+                              <span>Nakit MDF Alış Fiyatı</span>
+                              {material.cashPrice == null ? (
+                                <strong className="missing">Tanımlı değil</strong>
+                              ) : (
+                                <strong>{formatTryTwoDecimals(material.cashPrice)}</strong>
+                              )}
+                            </div>
+                            <div className="cc-supurgelik-source-price">
+                              <span>Kart / Taksitli MDF Alış Fiyatı</span>
+                              {material.cardInstallmentPrice == null ? (
+                                <strong className="missing">Tanımlı değil</strong>
+                              ) : (
+                                <strong>
+                                  {formatTryTwoDecimals(material.cardInstallmentPrice)}
+                                </strong>
+                              )}
+                            </div>
                             <button
                               type="button"
                               className="cc-btn cc-btn-sm"
                               onClick={() => startPriceEdit(material)}
+                              disabled={sourceBusy}
                             >
-                              {material.cardInstallmentPrice == null
-                                ? 'Fiyat Gir'
-                                : 'Düzenle'}
+                              Düzenle
                             </button>
                           </div>
                         )}
@@ -1136,6 +1296,78 @@ export function SupurgelikCostList() {
                       </div>
                     )}
                   </div>
+                  <div className="cc-supurgelik-source-row">
+                    <div className="cc-supurgelik-source-material">
+                      <strong>Kart / Taksit Farkı</strong>
+                      <span>Nakit satış × (1 + oran / 100)</span>
+                    </div>
+                    {editingCardMarkupRate ? (
+                      <form
+                        className="cc-supurgelik-source-edit"
+                        onSubmit={(event) => void saveCardMarkupRate(event)}
+                      >
+                        <label className="cc-field">
+                          <span>Kart / Taksit Farkı (%)</span>
+                          <input
+                            className="cc-input"
+                            inputMode="decimal"
+                            autoFocus
+                            value={cardMarkupRateInput}
+                            onChange={(event) =>
+                              setCardMarkupRateInput(event.target.value)
+                            }
+                            placeholder="20"
+                            disabled={cardMarkupRateSaving}
+                          />
+                        </label>
+                        <div className="cc-supurgelik-source-edit-actions">
+                          <button
+                            type="button"
+                            className="cc-btn cc-btn-sm"
+                            onClick={() => {
+                              setEditingCardMarkupRate(false);
+                              setCardMarkupRateInput('');
+                              setSourcePricingError(null);
+                            }}
+                            disabled={cardMarkupRateSaving}
+                          >
+                            İptal
+                          </button>
+                          <button
+                            type="submit"
+                            className="cc-btn cc-btn-primary cc-btn-sm"
+                            disabled={cardMarkupRateSaving}
+                          >
+                            {cardMarkupRateSaving ? 'Kaydediliyor…' : 'Kaydet'}
+                          </button>
+                        </div>
+                      </form>
+                    ) : (
+                      <div className="cc-supurgelik-source-price">
+                        <span>Mevcut Oran</span>
+                        <strong>
+                          {sourcePricing.cardMarkupRate == null
+                            ? 'Kart/taksit oranı tanımlı değil'
+                            : formatPercentRate(sourcePricing.cardMarkupRate)}
+                        </strong>
+                        <button
+                          type="button"
+                          className="cc-btn cc-btn-sm"
+                          onClick={() => {
+                            setEditingCardMarkupRate(true);
+                            setCardMarkupRateInput(
+                              sourcePricing.cardMarkupRate ?? '',
+                            );
+                            setSourcePricingError(null);
+                            setSourceNotice(null);
+                          }}
+                          disabled={sourceBusy}
+                        >
+                          Düzenle
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -1144,8 +1376,8 @@ export function SupurgelikCostList() {
               </p>
 
               <div className="cc-supurgelik-source-section-heading cc-supurgelik-source-section-divider">
-                <span>Dekoratif Oranlar</span>
-                <small>12 / 14 / 18 mm kalınlıklar</small>
+                <span>Dekoratif Maliyetler</span>
+                <small>Kalınlık bazlı dekoratif oran</small>
               </div>
 
               {sourceDecorativeRatesError ? (
@@ -1158,7 +1390,7 @@ export function SupurgelikCostList() {
                 </div>
               ) : sourceDecorativeRates.length === 0 ? (
                 <div className="cc-empty">
-                  <p>Aktif 12 / 14 / 18 mm dekoratif oranı bulunamadı.</p>
+                  <p>Aktif süpürgelik dekoratif oranı veya kalınlığı bulunamadı.</p>
                   <button
                     type="button"
                     className="cc-btn cc-btn-sm"
@@ -1172,7 +1404,7 @@ export function SupurgelikCostList() {
                   {sourceDecorativeRates.map((item) => (
                     <div
                       className="cc-supurgelik-source-row"
-                      key={item.modifierId}
+                      key={item.modifierId ?? `missing-${item.thicknessMm}`}
                     >
                       <div className="cc-supurgelik-source-material">
                         <strong>{item.thicknessMm} mm</strong>
@@ -1223,14 +1455,18 @@ export function SupurgelikCostList() {
                       ) : (
                         <div className="cc-supurgelik-source-price">
                           <span>Mevcut Oran</span>
-                          <strong>{formatPercentRate(item.rate)}</strong>
+                          {item.rate == null ? (
+                            <strong className="missing">Tanımlı değil</strong>
+                          ) : (
+                            <strong>{formatPercentRate(item.rate)}</strong>
+                          )}
                           <button
                             type="button"
                             className="cc-btn cc-btn-sm"
                             onClick={() => startDecorativeRateEdit(item)}
                             disabled={sourceBusy}
                           >
-                            Düzenle
+                            {item.rate == null ? 'Değer Gir' : 'Düzenle'}
                           </button>
                         </div>
                       )}
@@ -1240,7 +1476,8 @@ export function SupurgelikCostList() {
               )}
 
               <p className="cc-note">
-                Dekoratif oran yalnız 12, 14 ve 18 mm için geçerlidir.
+                Eksik kalınlık için oran girildiğinde Dekoratif ve Dekoratif PP
+                aynı kaynaktan yararlanır. Düz süpürgelik etkilenmez.
               </p>
 
               <div className="cc-supurgelik-source-section-heading cc-supurgelik-source-section-divider">

@@ -10,6 +10,10 @@ import { CitaListService } from './cita-list.service';
 import { CitaMdfService } from './cita-mdf.service';
 import { CitaNetService } from './cita-net.service';
 import { CitaProductionService } from './cita-production.service';
+import {
+  citaCardMarkupRateSnapshot,
+  setCitaCardMarkupRate,
+} from './cita-card-markup-rate.fixture';
 
 const ROLLBACK = new Error('ROLLBACK_CITA_GOLDEN_REGRESSION_DYNAMIC');
 const MATERIAL_14 = 'MDF-14-2100X2800-ZIMPARALI';
@@ -96,6 +100,16 @@ async function openPublishedBands(prisma: PrismaClient) {
   }));
 }
 
+async function citaExtraCostValueCount(prisma: PrismaClient): Promise<number> {
+  const group = await prisma.productGroup.findUnique({ where: { code: 'CITA' } });
+  if (!group) {
+    return 0;
+  }
+  return prisma.extraCostValue.count({
+    where: { productGroupId: group.id },
+  });
+}
+
 describe('CITA golden regression (DB runtime, rollback)', () => {
   const prisma = new PrismaClient();
   const net = new CitaNetService(prisma as never);
@@ -148,16 +162,18 @@ describe('CITA golden regression (DB runtime, rollback)', () => {
     });
     expect(keys).toEqual(sorted);
 
+    const extraCountBefore = await citaExtraCostValueCount(prisma);
     const fourteen30 = findRow(listed.rows, '14', '30');
-    expect(fourteen30?.statusCode).toBe(CITA_EXTRA_COST_MISSING);
-    expect(fourteen30?.productionCost).toBeNull();
-    expect(fourteen30?.missingExtraCosts).toEqual(
-      expect.arrayContaining(['CUTTING', 'LABOR']),
-    );
+    if (extraCountBefore === 0) {
+      expect(fourteen30?.statusCode).toBe(CITA_EXTRA_COST_MISSING);
+      expect(fourteen30?.productionCost).toBeNull();
+      expect(fourteen30?.missingExtraCosts).toEqual(
+        expect.arrayContaining(['CUTTING', 'LABOR']),
+      );
+    }
     expect(fourteen30?.pricing).toMatchObject({
       pricingAvailable: true,
       publishedCashPrice: '145',
-      publishedCardPrice: '174',
     });
 
     const custom = await production.getQuotedProductionCost({
@@ -169,16 +185,42 @@ describe('CITA golden regression (DB runtime, rollback)', () => {
       netQty: 53,
       source: 'CALCULATED_CUT_RULE',
     });
-    expect(custom.statusCode).toBe(CITA_EXTRA_COST_MISSING);
-    expect(custom.productionCost).toBeNull();
-    expect(custom.missingExtraCosts).toEqual(['CUTTING', 'LABOR']);
+    if (extraCountBefore === 0) {
+      expect(custom.statusCode).toBe(CITA_EXTRA_COST_MISSING);
+      expect(custom.productionCost).toBeNull();
+      expect(custom.missingExtraCosts).toEqual(['CUTTING', 'LABOR']);
+    }
     expect(custom.pricing).toMatchObject({
       pricingAvailable: true,
       publishedCashPrice: '145',
-      publishedCardPrice: '174',
       priceBand: { displayName: '3–4 cm' },
       statusCode: null,
     });
+    const rateBefore = await citaCardMarkupRateSnapshot(prisma);
+    try {
+      await prisma.$transaction(async (tx) => {
+        await setCitaCardMarkupRate(tx, '20');
+        const quoted = servicesForTx(tx);
+        const standard = await quoted.list.listProductionCosts();
+        expect(findRow(standard.rows, '14', '30')?.pricing).toMatchObject({
+          publishedCashPrice: '145',
+          publishedCardPrice: '174',
+        });
+        const customWithRate = await quoted.production.getQuotedProductionCost({
+          thicknessMm: '14',
+          widthMm: '35',
+          lengthMm: '2800',
+        });
+        expect(customWithRate.pricing).toMatchObject({
+          publishedCashPrice: '145',
+          publishedCardPrice: '174',
+        });
+        throw ROLLBACK;
+      });
+    } catch (error) {
+      if (error !== ROLLBACK) throw error;
+    }
+    expect(await citaCardMarkupRateSnapshot(prisma)).toBe(rateBefore);
     expect(Object.keys(custom.pricing)).toEqual(
       expect.arrayContaining([
         'pricingAvailable',
@@ -222,10 +264,12 @@ describe('CITA golden regression (DB runtime, rollback)', () => {
     }
     const date = now.toISOString().slice(0, 10);
     const extraCountBefore = await prisma.extraCostValue.count();
+    const rateBefore = await citaCardMarkupRateSnapshot(prisma);
 
     try {
       await prisma.$transaction(
         async (tx) => {
+          await setCitaCardMarkupRate(tx, '20');
           const svc = servicesForTx(tx);
           const quote = (
             thicknessMm: string,
@@ -252,7 +296,7 @@ describe('CITA golden regression (DB runtime, rollback)', () => {
 
           await svc.extras.updateValue('CUTTING', {
             productGroup: 'CITA',
-            amount: '5',
+            amount: '250',
             effectiveFrom: date,
           });
           await svc.extras.updateValue('LABOR', {
@@ -263,14 +307,18 @@ describe('CITA golden regression (DB runtime, rollback)', () => {
 
           const extrasAt = new Date();
           const extras14x30 = await quote('14', '30', extrasAt);
+          const extras14x35 = await quote('14', '35', extrasAt);
           expect(extras14x30.productionYield.netQty).toBe(
             before14x30.productionYield.netQty,
           );
           expect(extras14x30.mdfUnitCost).toBe(before14x30.mdfUnitCost);
-          expect(extras14x30.extraCostsTotal).toBe('15');
+          expect(extras14x30.cuttingBatchCost).toBe('250');
+          expect(extras14x30.cuttingUnitCost).toBe('1');
+          expect(extras14x30.extraCostsTotal).toBe('11');
           expect(extras14x30.productionCost).toBe(
-            toDecimal(extras14x30.mdfUnitCost!).plus(15).toFixed(),
+            toDecimal(extras14x30.mdfUnitCost!).plus(11).toFixed(),
           );
+          expect(extras14x35.cuttingUnitCost).toBe(extras14x30.cuttingUnitCost);
           expect(extras14x30.pricing).toMatchObject({
             publishedCashPrice: '145',
             publishedCardPrice: '174',
@@ -278,7 +326,7 @@ describe('CITA golden regression (DB runtime, rollback)', () => {
 
           await svc.extras.updateValue('CUTTING', {
             productGroup: 'CITA',
-            amount: '6',
+            amount: '500',
             effectiveFrom: date,
           });
           const cuttingAt = new Date();
@@ -287,7 +335,9 @@ describe('CITA golden regression (DB runtime, rollback)', () => {
             extras14x30.productionYield.netQty,
           );
           expect(cutting14x30.mdfUnitCost).toBe(extras14x30.mdfUnitCost);
-          expect(cutting14x30.extraCostsTotal).toBe('16');
+          expect(cutting14x30.cuttingBatchCost).toBe('500');
+          expect(cutting14x30.cuttingUnitCost).toBe('2');
+          expect(cutting14x30.extraCostsTotal).toBe('12');
           expect(cutting14x30.productionCost).toBe(
             toDecimal(extras14x30.productionCost!).plus(1).toFixed(),
           );
@@ -398,6 +448,7 @@ describe('CITA golden regression (DB runtime, rollback)', () => {
     });
     expect(restored?.effectiveTo).toBeNull();
     expect(toDecimal(restored!.price.toString()).equals(originalAmount)).toBe(true);
+    expect(await citaCardMarkupRateSnapshot(prisma)).toBe(rateBefore);
   },
   30_000,
 );

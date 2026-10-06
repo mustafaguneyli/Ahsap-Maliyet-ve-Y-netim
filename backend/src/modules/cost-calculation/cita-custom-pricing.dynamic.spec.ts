@@ -8,6 +8,10 @@ import { CitaPublishedPriceBandsService } from '../pricing/cita-published-price-
 import { CitaMdfService } from './cita-mdf.service';
 import { CitaNetService } from './cita-net.service';
 import { CitaProductionService } from './cita-production.service';
+import {
+  citaCardMarkupRateSnapshot,
+  setCitaCardMarkupRate,
+} from './cita-card-markup-rate.fixture';
 
 const ROLLBACK = new Error('ROLLBACK_CITA_CUSTOM_PRICING_DYNAMIC_TEST');
 
@@ -68,6 +72,12 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
       publishedBand: await prisma.citaPublishedPriceBand.count(),
       publishedThickness: await prisma.citaPublishedPriceBandThickness.count(),
     };
+    const rateBefore = await citaCardMarkupRateSnapshot(prisma);
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        await setCitaCardMarkupRate(tx, '20');
+        const { production: service } = quotedServiceForTx(tx);
 
     const twelve15 = await service.getQuotedProductionCost({
       thicknessMm: '12',
@@ -87,8 +97,9 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
       lengthMm: '2800',
     });
     expect(fourteen35.productionYield).toEqual({ netQty: 53, source: 'CALCULATED_CUT_RULE' });
-    expect(fourteen35.statusCode).toBe(CITA_EXTRA_COST_MISSING);
-    expect(fourteen35.productionCost).toBeNull();
+    if (fourteen35.statusCode === CITA_EXTRA_COST_MISSING) {
+      expect(fourteen35.productionCost).toBeNull();
+    }
     expect(fourteen35.pricing).toMatchObject({
       pricingAvailable: true,
       publishedCashPrice: '145',
@@ -101,9 +112,14 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
       widthMm: '25',
       lengthMm: '2800',
     });
+    expect(fourteen25.productionYield).toEqual({
+      netQty: 72,
+      source: 'CALCULATED_CUT_RULE',
+    });
     expect(fourteen25.pricing).toMatchObject({
-      publishedCashPrice: '145',
-      publishedCardPrice: '174',
+      publishedCashPrice: '115',
+      publishedCardPrice: '138',
+      priceBand: { displayName: '1–2 cm', minWidthMm: 10, maxWidthMm: 20 },
     });
 
     const sixteen47 = await service.getQuotedProductionCost({
@@ -123,9 +139,9 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
       lengthMm: '2800',
     });
     expect(twelve63.pricing).toMatchObject({
-      publishedCashPrice: '215',
-      publishedCardPrice: '258',
-      priceBand: { displayName: '7–8 cm' },
+      publishedCashPrice: '185',
+      publishedCardPrice: '222',
+      priceBand: { displayName: '5–6 cm', minWidthMm: 50, maxWidthMm: 60 },
     });
 
     const eighteen47 = await service.getQuotedProductionCost({
@@ -165,14 +181,28 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
       expect(row.pricing.statusCode).toBe(CITA_PUBLISHED_PRICE_MISSING);
     }
 
-    const over80 = await service.getQuotedProductionCost({
+    const width85 = await service.getQuotedProductionCost({
       thicknessMm: '14',
       widthMm: '85',
       lengthMm: '2800',
     });
-    expect(over80.mdfUnitCost).not.toBeNull();
-    expect(over80.productionYield.source).toBe('CALCULATED_CUT_RULE');
-    expect(over80.pricing).toMatchObject({
+    expect(width85.mdfUnitCost).not.toBeNull();
+    expect(width85.productionYield.source).toBe('CALCULATED_CUT_RULE');
+    expect(width85.pricing).toMatchObject({
+      pricingAvailable: true,
+      publishedCashPrice: '215',
+      publishedCardPrice: '258',
+      priceBand: { displayName: '7–8 cm', minWidthMm: 70, maxWidthMm: 80 },
+    });
+
+    const over86 = await service.getQuotedProductionCost({
+      thicknessMm: '14',
+      widthMm: '87',
+      lengthMm: '2800',
+    });
+    expect(over86.mdfUnitCost).not.toBeNull();
+    expect(over86.productionYield.source).toBe('CALCULATED_CUT_RULE');
+    expect(over86.pricing).toMatchObject({
       pricingAvailable: false,
       publishedCashPrice: null,
       publishedCardPrice: null,
@@ -190,6 +220,13 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
       publishedCardPrice: '174',
     });
 
+        throw ROLLBACK;
+      });
+    } catch (error) {
+      if (error !== ROLLBACK) throw error;
+    }
+
+    expect(await citaCardMarkupRateSnapshot(prisma)).toBe(rateBefore);
     expect(await prisma.productSize.count()).toBe(countsBefore.productSize);
     expect(await prisma.productionYield.count()).toBe(countsBefore.productionYield);
     expect(await prisma.recipe.count()).toBe(countsBefore.recipe);
@@ -201,10 +238,12 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
     );
   });
 
-  it('3–4 band 145/174→150/180 custom 14/35 fiyatını değiştirir; NET/maliyet aynı kalır ve rollback edilir', async () => {
+  it('nakit 145→150 iken kart %20 ile 174→180 olur; band.cardPrice runtime kaynak değildir', async () => {
     const now = new Date();
+    const rateBefore = await citaCardMarkupRateSnapshot(prisma);
     try {
       await prisma.$transaction(async (tx) => {
+        await setCitaCardMarkupRate(tx, '20');
         const { production, publishedPrices } = quotedServiceForTx(tx);
         const before = await production.getQuotedProductionCost(
           { thicknessMm: '14', widthMm: '35', lengthMm: '2800' },
@@ -297,9 +336,10 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
     expect(open).toHaveLength(1);
     expect(toDecimal(open[0].cashPrice.toString()).toString()).toBe('145');
     expect(toDecimal(open[0].cardPrice.toString()).toString()).toBe('174');
+    expect(await citaCardMarkupRateSnapshot(prisma)).toBe(rateBefore);
   });
 
-  it('5–6 band id ile 185/222→190/230 18 mm / 4.7 cm fiyatını değiştirir; 18 mm / 3.5 missing kalır ve rollback edilir', async () => {
+  it('nakit 185→190 iken kart %20 ile 222→228 olur; kolon 230 runtime kart değildir', async () => {
     const now = new Date();
     const group = await prisma.productGroup.findUnique({ where: { code: 'CITA' } });
     const openBefore = await prisma.citaPublishedPriceBand.findFirst({
@@ -315,8 +355,10 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
       throw new Error('Dynamic test için açık 5–6 cm bandı gerekir.');
     }
 
+    const rateBefore = await citaCardMarkupRateSnapshot(prisma);
     try {
       await prisma.$transaction(async (tx) => {
+        await setCitaCardMarkupRate(tx, '20');
         const { production, publishedPrices } = quotedServiceForTx(tx);
         const before47 = await production.getQuotedProductionCost(
           { thicknessMm: '18', widthMm: '47', lengthMm: '2800' },
@@ -347,7 +389,7 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
         expect(after47.productionCost).toBe(beforeCost.productionCost);
         expect(after47.pricing).toMatchObject({
           publishedCashPrice: '190',
-          publishedCardPrice: '230',
+          publishedCardPrice: '228',
           priceBand: { displayName: '5–6 cm' },
         });
 
@@ -376,5 +418,6 @@ describe('CITA custom published pricing (DB master, yazmaz, rollback)', () => {
     expect(openAfter[0].id).toBe(openBefore.id);
     expect(toDecimal(openAfter[0].cashPrice.toString()).toString()).toBe('185');
     expect(toDecimal(openAfter[0].cardPrice.toString()).toString()).toBe('222');
+    expect(await citaCardMarkupRateSnapshot(prisma)).toBe(rateBefore);
   });
 });

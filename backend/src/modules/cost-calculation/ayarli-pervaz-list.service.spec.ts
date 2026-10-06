@@ -120,6 +120,7 @@ describe('CostCalculationService AYARLI_PERVAZ toplu liste', () => {
         rawMaterialCode: 'MDF-12-2200X2800-ZIMPARALI',
       },
       expect.any(Date),
+      'CARD_INSTALLMENT',
     );
   });
 

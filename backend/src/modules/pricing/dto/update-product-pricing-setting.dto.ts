@@ -1,4 +1,4 @@
-import { IsIn, IsNotEmpty, Matches } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 /**
@@ -25,10 +25,10 @@ export class UpdateProductPricingSettingDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().replace(',', '.') : value))
   profitRate!: string;
 
-  @IsNotEmpty({ message: 'Kredi kartı farkı zorunludur.' })
+  @IsOptional()
   @Matches(/^\d+(\.\d{1,4})?$/, {
     message: 'Kredi kartı farkı geçerli bir Decimal olmalıdır (örn. 20).',
   })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim().replace(',', '.') : value))
-  cardMarkupRate!: string;
+  cardMarkupRate?: string;
 }

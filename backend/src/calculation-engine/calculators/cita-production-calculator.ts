@@ -5,6 +5,9 @@ import { CITA_EXTRA_COST_TYPE_ORDER } from '../../modules/extra-costs/cita-extra
 
 export const CITA_EXTRA_COST_MISSING = 'EXTRA_COST_MISSING' as const;
 
+/** Çıta CUTTING source değeri 250 parça için toplam kesim maliyetidir. */
+export const CITA_CUTTING_BATCH_QTY = 250;
+
 export type CitaProductionExtraCost = {
   code: (typeof CITA_EXTRA_COST_TYPE_ORDER)[number];
   amount: string;
@@ -17,10 +20,31 @@ export type CitaProductionResult = CitaMdfResult & {
   extraCostsAvailable: boolean;
   missingExtraCosts: Array<(typeof CITA_EXTRA_COST_TYPE_ORDER)[number]>;
   statusCode: typeof CITA_EXTRA_COST_MISSING | null;
+  cuttingBatchCost: string | null;
+  cuttingUnitCost: string | null;
 };
 
+function citaCuttingUnitCost(batchAmount: string) {
+  return toDecimal(batchAmount).div(CITA_CUTTING_BATCH_QTY);
+}
+
+function citaCuttingFields(present: CitaProductionExtraCost[]): {
+  cuttingBatchCost: string | null;
+  cuttingUnitCost: string | null;
+} {
+  const cutting = present.find((item) => item.code === 'CUTTING');
+  if (cutting == null) {
+    return { cuttingBatchCost: null, cuttingUnitCost: null };
+  }
+  return {
+    cuttingBatchCost: cutting.amount,
+    cuttingUnitCost: citaCuttingUnitCost(cutting.amount).toFixed(),
+  };
+}
+
 /**
- * productionCost = mdfUnitCost + CUTTING + LABOR.
+ * productionCost = mdfUnitCost + (CUTTING / 250) + LABOR.
+ * extraCosts.CUTTING ham 250-parça tutarıdır; birim kesim runtime türetilir.
  * Eksik kalemde 0 uydurulmaz; productionCost null kalır.
  */
 export function calculateCitaProductionCost(input: {
@@ -49,6 +73,8 @@ export function calculateCitaProductionCost(input: {
     present.push({ code, amount: amount.toFixed() });
   }
 
+  const cuttingFields = citaCuttingFields(present);
+
   if (missing.length > 0) {
     return {
       ...input.mdf,
@@ -58,12 +84,19 @@ export function calculateCitaProductionCost(input: {
       extraCostsAvailable: false,
       missingExtraCosts: missing,
       statusCode: CITA_EXTRA_COST_MISSING,
+      ...cuttingFields,
     };
   }
 
-  const extraCostsTotal = present.reduce(
-    (sum, item) => sum.plus(item.amount),
-    toDecimal(0),
+  const labor = present.find((item) => item.code === 'LABOR');
+  if (cuttingFields.cuttingUnitCost == null || labor == null) {
+    throw new BadRequestException(
+      'Çıta productionCost için CUTTING ve LABOR birlikte tanımlı olmalıdır.',
+    );
+  }
+
+  const extraCostsTotal = toDecimal(cuttingFields.cuttingUnitCost).plus(
+    toDecimal(labor.amount),
   );
   const productionCost = toDecimal(input.mdf.mdfUnitCost).plus(extraCostsTotal);
 
@@ -75,5 +108,6 @@ export function calculateCitaProductionCost(input: {
     extraCostsAvailable: true,
     missingExtraCosts: [],
     statusCode: null,
+    ...cuttingFields,
   };
 }

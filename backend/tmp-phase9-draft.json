@@ -1,0 +1,71 @@
+﻿{
+    "customerName":  "TEST ASAMA9 dbg",
+    "documentDateText":  "30.09.2026",
+    "vatRate":  "10",
+    "lines":  [
+                  {
+                      "kind":  "FREE_TEXT",
+                      "productNameText":  "Kapı İmalatı 210 × 90 cm",
+                      "widthMm":  "900",
+                      "lengthMm":  "2100",
+                      "thicknessMm":  "8",
+                      "decorText":  "Zımparalı",
+                      "productionNote":  "Kapı İmalatı aktarımı · 210 × 90 cm · 3 kapı · Yüzey: 08 MM MDF 210×280 Zımparalı · Kapı eni: 900 mm · En katsayısı: x1 · Satış kaynağı: CASH · Öneri nakit: 8790.6 · Öneri kart: 10109.19 · MDF yüzey: 6 yüzey / 2 tabaka · Kasa: 34 MM MDF Kasa 10×210 (RESOLVED) · ruleSource=VERIFIED_210_DOOR_RULE · toplam boy=7.5 · tip=34_MM · ölçü=10×210 · Yan pervaz: Ayarlı Pervaz 12 mm · 100×2200 mm (RESOLVED) · adet=12 · Başlık: Ayarlı Pervaz 12 mm · 100×2200 mm (RESOLVED) · adet=3",
+                      "quantity":  "3",
+                      "unitText":  "ADET",
+                      "discountRate":  "0",
+                      "unitPrice":  "8790.6",
+                      "priceSource":  "ENTERED"
+                  }
+              ],
+    "manualMaterials":  [
+                            {
+                                "lineNo":  1,
+                                "rawMaterialId":  "52e102ff-529a-48ba-bbea-77dd0b09f489",
+                                "materialNameText":  "08 MM MDF 210×280 Zımparalı",
+                                "thicknessMm":  "8",
+                                "sheetWidthMm":  2100,
+                                "sheetLengthMm":  2800,
+                                "surfaceType":  "Zımparalı",
+                                "quantity":  "2",
+                                "pieceQuantity":  "6",
+                                "sheetQuantity":  "2",
+                                "unitText":  "TABAKA",
+                                "componentRole":  "YUZAY_MDF",
+                                "note":  "Yüzey adedi 6; tam tabaka 2.",
+                                "unverified":  false
+                            },
+                            {
+                                "lineNo":  1,
+                                "materialNameText":  "34 MM MDF Kasa 10×210",
+                                "quantity":  "7.5",
+                                "pieceQuantity":  "7.5",
+                                "unitText":  "BOY",
+                                "componentRole":  "FRAME",
+                                "note":  "Kapı başına 2.5 boy (doğrulanmış 210 cm kuralı). Toplam 7.5 boy.",
+                                "unverified":  false
+                            },
+                            {
+                                "lineNo":  1,
+                                "materialNameText":  "Ayarlı Pervaz 12 mm · 100×2200",
+                                "thicknessMm":  "12",
+                                "quantity":  "12",
+                                "pieceQuantity":  "12",
+                                "unitText":  "ADET",
+                                "componentRole":  "SIDE_TRIM",
+                                "note":  "Kapı başına 4 yan pervaz (başlık hariç).",
+                                "unverified":  false
+                            },
+                            {
+                                "lineNo":  1,
+                                "materialNameText":  "Ayarlı Pervaz 12 mm · 100×2200",
+                                "thicknessMm":  "12",
+                                "quantity":  "3",
+                                "pieceQuantity":  "3",
+                                "unitText":  "ADET",
+                                "componentRole":  "HEADER",
+                                "note":  "Kapı başına 1 başlık.",
+                                "unverified":  false
+                            }
+                        ]
+}

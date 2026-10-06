@@ -1,0 +1,549 @@
+.db-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 1280px;
+}
+
+.db-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 16px;
+  align-items: start;
+}
+
+.db-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.db-aside {
+  position: sticky;
+  top: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.db-aside h3 {
+  margin: 0;
+  font-size: 15px;
+  color: #111827;
+}
+
+.db-aside-list {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.db-aside-list > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid #f3f4f6;
+  padding-bottom: 6px;
+}
+
+.db-aside-list dt {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.db-aside-list dd {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111827;
+  text-align: right;
+  max-width: 58%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.db-sticky-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 12px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.db-sticky-item span {
+  display: block;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.db-sticky-item strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+  color: #111827;
+}
+
+.db-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.db-choice-row button {
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.db-choice-row button.active {
+  background: #1f2937;
+  color: #fff;
+  border-color: #1f2937;
+}
+
+.db-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.db-step {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  color: #374151;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.db-step.active {
+  background: #1f2937;
+  color: #fff;
+  border-color: #1f2937;
+}
+
+.db-step.done {
+  border-color: #9ca3af;
+}
+
+.db-step-current {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .db-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .db-aside {
+    position: static;
+  }
+
+  .db-sticky-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.db-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.db-card h2 {
+  margin: 0;
+  font-size: 18px;
+  color: #111827;
+}
+
+.db-card p.lead {
+  margin: 0;
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.db-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.db-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.db-field label {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.db-field input,
+.db-field select {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+
+.db-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.db-presets button {
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.db-presets button.active {
+  background: #1f2937;
+  color: #fff;
+  border-color: #1f2937;
+}
+
+.db-warn {
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.db-error {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.db-info {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e3a8a;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.db-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.db-actions button {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.db-actions button.primary {
+  background: #1f2937;
+  color: #fff;
+  border-color: #1f2937;
+}
+
+.db-actions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.db-price-type {
+  display: inline-flex;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.db-price-type button {
+  border: 0;
+  background: transparent;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.db-price-type button.active {
+  background: #1f2937;
+  color: #fff;
+}
+
+.db-mdf-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.db-mdf-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.db-mdf-item.selected {
+  border-color: #1f2937;
+  background: #f9fafb;
+}
+
+.db-mdf-item strong {
+  display: block;
+  font-size: 14px;
+}
+
+.db-mdf-item span {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.db-cost-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.db-cost-row {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.db-cost-row.disabled {
+  opacity: 0.65;
+}
+
+.db-cost-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.db-cost-controls input[type='text'] {
+  width: 110px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.db-cost-controls select {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.db-result-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.db-metric {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.db-metric span {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.db-metric strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 16px;
+  color: #111827;
+}
+
+.db-subtotal {
+  border: 1px solid #1f2937;
+  border-radius: 10px;
+  padding: 12px;
+  background: #f9fafb;
+}
+
+.db-subtotal span {
+  display: block;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.db-subtotal strong {
+  font-size: 22px;
+}
+
+.db-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.db-table th,
+.db-table td {
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  padding: 8px 6px;
+}
+
+.db-material {
+  border: 1px dashed #d1d5db;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.db-material h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.db-material ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #374151;
+  font-size: 13px;
+}
+
+.db-material-section {
+  margin-top: 10px;
+}
+
+.db-material-section h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.db-physical-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 0.7fr 0.6fr 1.2fr auto;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.db-physical-row input {
+  min-width: 0;
+}
+
+.db-transfer {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.db-transfer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.db-transfer-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #4b5563;
+}
+
+@media (max-width: 720px) {
+  .db-physical-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .db-cost-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media screen and (max-width: 767px) {
+  .db-steps {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
+  }
+
+  .db-step {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .db-step-current {
+    display: block;
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: #111827;
+  }
+
+  .db-sticky-summary {
+    position: static;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .db-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .db-actions {
+    justify-content: stretch;
+  }
+
+  .db-actions button {
+    flex: 1 1 auto;
+  }
+
+  .db-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}

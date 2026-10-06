@@ -450,31 +450,32 @@ describe('DoorFrameCalculator nakit / kart satış', () => {
     expect(b.pricing.cardSalePrice).toBe('445');
   });
 
-  it('cardMarkupRate eksikse sessiz varsayım yapmaz', () => {
-    expect(() =>
-      calculator.applySaleChannels(
-        [
-          {
-            widthCm: 10,
-            lengthCm: 210,
-            displayName: 'x',
-            parts: [],
-            mdfCost: '0',
-            extraCosts: { cutting: '0', glue: '0', labor: '0', other: '0', total: '0' },
-            productionCost: '0',
-            pricing: {
-              vatRate: '0',
-              vatAmount: '0',
-              costWithVat: '0',
-              profitRate: '0',
-              profitAmount: '0',
-              priceBeforeRounding: '100',
-              roundedSalePrice: '100',
-            },
+  it('cardMarkupRate eksikse nakit durur, kart null olur', () => {
+    const [row] = calculator.applySaleChannels(
+      [
+        {
+          widthCm: 10,
+          lengthCm: 210,
+          displayName: 'x',
+          parts: [],
+          mdfCost: '0',
+          extraCosts: { cutting: '0', glue: '0', labor: '0', other: '0', total: '0' },
+          productionCost: '0',
+          pricing: {
+            vatRate: '0',
+            vatAmount: '0',
+            costWithVat: '0',
+            profitRate: '0',
+            profitAmount: '0',
+            priceBeforeRounding: '100',
+            roundedSalePrice: '100',
           },
-        ],
-        '',
-      ),
-    ).toThrow('Kredi kartı farkı (cardMarkupRate) eksik.');
+        },
+      ],
+      null,
+    );
+    expect(row.pricing.cashSalePrice).toBe('100');
+    expect(row.pricing.cardSalePrice).toBeNull();
+    expect(row.pricing.cardMarkupRate).toBeNull();
   });
 });

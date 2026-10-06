@@ -1,5 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
-import { roundUpToWholeTl, toDecimal } from '../../common/decimal/decimal.util';
+import { toDecimal } from '../../common/decimal/decimal.util';
+import {
+  applyPercentCardSale,
+  CARD_MARKUP_RATE_MISSING,
+  CARD_MARKUP_RATE_MISSING_TR,
+} from '../../calculation-engine/pricing/percent-card-sale';
 
 export type CashOverrideSnapshot = {
   id: string;
@@ -11,21 +16,23 @@ export type PublishedSalePrices = {
   calculatedCashPrice: string;
   cashOverride: CashOverrideSnapshot | null;
   publishedCashPrice: string;
-  publishedCardPrice: string;
+  publishedCardPrice: string | null;
+  cardStatusCode: typeof CARD_MARKUP_RATE_MISSING | null;
+  cardStatusMessage: string | null;
 };
 
 /**
  * Ticari yayın katmanı. Hesaplanan nakit fiyatı değiştirmez.
  * publishedCashPrice = override.cashPrice ?? calculatedCashPrice
  * publishedCardPrice = ROUNDUP(publishedCashPrice * (1 + cardMarkupRate/100), 0)
+ * cardMarkupRate yoksa kart null; nakit yine yayımlanır.
  */
 export function applyPublishedSalePrices(
   calculatedCashPrice: string,
-  cardMarkupRateRaw: string,
+  cardMarkupRateRaw: string | null | undefined,
   override: CashOverrideSnapshot | null,
 ): PublishedSalePrices {
   const calculated = parsePositiveMoney(calculatedCashPrice, 'calculatedCashPrice');
-  const cardMarkupRate = parseNonNegativeRate(cardMarkupRateRaw);
 
   let publishedCash = calculated;
   let cashOverride: CashOverrideSnapshot | null = null;
@@ -39,15 +46,19 @@ export function applyPublishedSalePrices(
     };
   }
 
-  const hundred = toDecimal(100);
-  const one = toDecimal(1);
-  const publishedCardBefore = publishedCash.times(one.plus(cardMarkupRate.div(hundred)));
+  const card = applyPercentCardSale({
+    cashPrice: publishedCash.toFixed(),
+    cardMarkupRate: cardMarkupRateRaw,
+    rounding: 'roundUpWholeTl',
+  });
 
   return {
     calculatedCashPrice: calculated.toFixed(),
     cashOverride,
     publishedCashPrice: publishedCash.toFixed(),
-    publishedCardPrice: roundUpToWholeTl(publishedCardBefore).toFixed(),
+    publishedCardPrice: card.cardSalePrice,
+    cardStatusCode: card.statusCode,
+    cardStatusMessage: card.statusMessage,
   };
 }
 
@@ -67,18 +78,4 @@ function parsePositiveMoney(value: string, fieldName: string) {
   return amount;
 }
 
-function parseNonNegativeRate(value: string) {
-  if (value == null || value === '') {
-    throw new BadRequestException('Kredi kartı farkı (cardMarkupRate) eksik.');
-  }
-  let rate;
-  try {
-    rate = toDecimal(value);
-  } catch {
-    throw new BadRequestException(`Kredi kartı farkı (cardMarkupRate) geçersiz: ${value}`);
-  }
-  if (rate.isNegative()) {
-    throw new BadRequestException('Kredi kartı farkı (cardMarkupRate) negatif olamaz.');
-  }
-  return rate;
-}
+export { CARD_MARKUP_RATE_MISSING, CARD_MARKUP_RATE_MISSING_TR };

@@ -209,3 +209,21 @@
   gap: 8px;
   margin-top: 8px;
 }
+
+@media screen and (max-width: 767px) {
+  .ec-toolbar {
+    flex-direction: column;
+  }
+
+  .ec-drawer {
+    width: 100%;
+  }
+
+  .ec-form-actions {
+    flex-wrap: wrap;
+  }
+
+  .ec-form-actions .ec-btn {
+    flex: 1 1 auto;
+  }
+}

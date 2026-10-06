@@ -41,7 +41,7 @@ describe('seedCitaProductMaster', () => {
       sizesSkippedExisting: 0,
     });
     expect(prisma.productGroup.create).toHaveBeenCalledWith({
-      data: { code: 'CITA', name: 'Çıta', isActive: true },
+      data: { code: 'CITA', name: 'Çıta', calculatorType: 'CITA', isActive: true },
     });
     expect(prisma.product.create).toHaveBeenCalledTimes(1);
     expect(prisma.product.create).toHaveBeenCalledWith({

@@ -4,14 +4,17 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { CalculatorType } from '@prisma/client';
 import { DoorFrameVariantCode } from '../../calculation-engine/calculators/door-frame-variants';
 import {
   SUPURGELIK_PRODUCT_CODES,
   type SupurgelikProductCode,
 } from '../../calculation-engine/calculators/supurgelik-mdf-calculator';
 import { PrismaService } from '../../prisma/prisma.service';
+import type { CitaNetQueryDto } from './dto/cita-net-query.dto';
 import { CitaProductionService } from './cita-production.service';
 import { CostCalculationService } from './cost-calculation.service';
+import { GenericRecipeService } from './generic-recipe.service';
 import type { OrderQuoteDto } from './dto/order-quote.dto';
 import {
   EXTRA_COST_TR,
@@ -37,13 +40,14 @@ export type OrderQuoteResult = {
   totalCashPrice: string | null;
   unitCardPrice: string | null;
   totalCardPrice: string | null;
+  cardPriceMessage: string | null;
 };
 
 type LoadedProduct = {
   id: string;
   code: string;
   name: string;
-  productGroup: { code: string; name: string };
+  productGroup: { code: string; name: string; calculatorType: CalculatorType };
 };
 
 @Injectable()
@@ -52,6 +56,7 @@ export class OrderQuoteService {
     private readonly prisma: PrismaService,
     private readonly costCalculationService: CostCalculationService,
     private readonly citaProductionService: CitaProductionService,
+    private readonly genericRecipeService: GenericRecipeService,
   ) {}
 
   async quote(dto: OrderQuoteDto): Promise<OrderQuoteResult> {
@@ -61,7 +66,7 @@ export class OrderQuoteService {
         id: true,
         code: true,
         name: true,
-        productGroup: { select: { code: true, name: true } },
+        productGroup: { select: { code: true, name: true, calculatorType: true } },
       },
     });
     if (!product) {
@@ -78,9 +83,59 @@ export class OrderQuoteService {
       case 'SUPURGELIK':
         return this.quoteSupurgelik(product, dto);
       default:
+        if (product.productGroup.calculatorType === CalculatorType.GENERIC_RECIPE) {
+          return this.quoteGeneric(product, dto);
+        }
         throw new BadRequestException(
           'Bu ürün grubu için sipariş maliyeti henüz hesaplanamıyor.',
         );
+    }
+  }
+
+  private async quoteGeneric(
+    product: LoadedProduct,
+    dto: OrderQuoteDto,
+  ): Promise<OrderQuoteResult> {
+    const widthMm = Number(dto.widthMm);
+    const lengthMm = Number(dto.lengthMm);
+    if (!Number.isInteger(widthMm) || !Number.isInteger(lengthMm)) {
+      throw new BadRequestException('Generic ürün ölçüsü tam mm olmalıdır.');
+    }
+    try {
+      const row = await this.genericRecipeService.quoteByProductSize({
+        productId: product.id,
+        widthMm,
+        lengthMm,
+        materialPriceType: dto.materialPriceType,
+      });
+      if (row.status !== 'OK' || row.productionCost == null) {
+        return this.buildResult({
+          product,
+          dto,
+          thicknessMm: null,
+          unitProductionCost: null,
+          missingMessages: row.missingSources.length
+            ? row.missingSources
+            : [MISSING_SOURCE_MESSAGE],
+          unitCashPrice: null,
+          unitCardPrice: null,
+          cardPriceMessage: null,
+          saleMissing: true,
+        });
+      }
+      return this.buildResult({
+        product,
+        dto,
+        thicknessMm: null,
+        unitProductionCost: row.productionCost,
+        missingMessages: [],
+        unitCashPrice: row.pricing?.cashSalePrice ?? null,
+        unitCardPrice: row.pricing?.cardSalePrice ?? null,
+        cardPriceMessage: row.pricing?.cardStatusMessage ?? null,
+        saleMissing: row.pricing?.cashSalePrice == null,
+      });
+    } catch (error) {
+      return this.quoteFromCaughtError(product, dto, null, error);
     }
   }
 
@@ -93,11 +148,15 @@ export class OrderQuoteService {
     }
 
     try {
-      const row = await this.citaProductionService.getQuotedProductionCost({
+      const query: CitaNetQueryDto = {
         thicknessMm: dto.thicknessMm,
         widthMm: dto.widthMm,
         lengthMm: dto.lengthMm,
-      });
+      };
+      if (dto.materialPriceType) {
+        query.materialPriceType = dto.materialPriceType;
+      }
+      const row = await this.citaProductionService.getQuotedProductionCost(query);
 
       const missingMessages: string[] = [];
       if (row.statusCode === 'EXTRA_COST_MISSING') {
@@ -123,6 +182,9 @@ export class OrderQuoteService {
         missingMessages,
         unitCashPrice: row.pricing?.publishedCashPrice ?? null,
         unitCardPrice: row.pricing?.publishedCardPrice ?? null,
+        cardPriceMessage: row.pricing?.publishedCardPrice
+          ? null
+          : row.pricing?.cardStatusMessage ?? null,
         saleMissing,
       });
     } catch (error) {
@@ -140,9 +202,15 @@ export class OrderQuoteService {
     }
 
     try {
-      const list = await this.costCalculationService.getDoorFrameMdfCosts(
-        variant as DoorFrameVariantCode,
-      );
+      const list = dto.materialPriceType
+        ? await this.costCalculationService.getDoorFrameMdfCosts(
+            variant as DoorFrameVariantCode,
+            new Date(),
+            dto.materialPriceType,
+          )
+        : await this.costCalculationService.getDoorFrameMdfCosts(
+            variant as DoorFrameVariantCode,
+          );
       const row = list.rows.find(
         (item) =>
           sameMm(item.widthCm * 10, dto.widthMm) &&
@@ -160,6 +228,9 @@ export class OrderQuoteService {
         missingMessages: [],
         unitCashPrice: row.pricing.publishedCashPrice ?? null,
         unitCardPrice: row.pricing.publishedCardPrice ?? null,
+        cardPriceMessage: row.pricing.publishedCardPrice
+          ? null
+          : row.pricing.cardStatusMessage ?? null,
         saleMissing:
           row.pricing.publishedCashPrice == null &&
           row.pricing.publishedCardPrice == null,
@@ -178,7 +249,7 @@ export class OrderQuoteService {
     }
 
     try {
-      const list = await this.loadPervazList(product.code);
+      const list = await this.loadPervazList(product.code, dto.materialPriceType);
       const row = list.rows.find(
         (item) =>
           sameMm(item.thicknessMm, dto.thicknessMm!) &&
@@ -202,6 +273,7 @@ export class OrderQuoteService {
         missingMessages: [],
         unitCashPrice: cash,
         unitCardPrice: card,
+        cardPriceMessage: card == null ? row.pricing.cardStatusMessage ?? null : null,
         saleMissing: cash == null,
       });
     } catch (error) {
@@ -221,9 +293,14 @@ export class OrderQuoteService {
     }
 
     try {
-      const list = await this.costCalculationService.getSupurgelikMdfCosts({
-        productCode: product.code,
-      });
+      const list = await this.costCalculationService.getSupurgelikMdfCosts(
+        dto.materialPriceType
+          ? {
+              productCode: product.code,
+              materialPriceType: dto.materialPriceType,
+            }
+          : { productCode: product.code },
+      );
       const row = list.rows.find(
         (item) =>
           sameMm(item.thicknessMm, dto.thicknessMm!) &&
@@ -234,31 +311,62 @@ export class OrderQuoteService {
         throw new BadRequestException('Bu ürün için seçilen ölçü hesaplanamıyor.');
       }
 
-      const missingMessages = supurgelikMissingMessages(row.errorCode);
+      const sale = row.pricing as
+        | {
+            publishedCashPrice?: string | null;
+            publishedCardPrice?: string | null;
+            cardStatusMessage?: string | null;
+          }
+        | null
+        | undefined;
+      const missingMessages = supurgelikMissingMessages(
+        row.errorCode,
+        dto.materialPriceType ?? 'CARD_INSTALLMENT',
+      );
+      const card = sale?.publishedCardPrice ?? null;
       return this.buildResult({
         product,
         dto,
         thicknessMm: dto.thicknessMm,
         unitProductionCost: row.productionCost,
         missingMessages,
-        unitCashPrice: row.pricing?.publishedCashPrice ?? null,
-        unitCardPrice: null,
-        saleMissing: row.pricing?.publishedCashPrice == null,
+        unitCashPrice: sale?.publishedCashPrice ?? null,
+        unitCardPrice: card,
+        cardPriceMessage: card == null ? sale?.cardStatusMessage ?? null : null,
+        saleMissing: sale?.publishedCashPrice == null,
       });
     } catch (error) {
       return this.quoteFromCaughtError(product, dto, dto.thicknessMm, error);
     }
   }
 
-  private async loadPervazList(productCode: string) {
+  private async loadPervazList(
+    productCode: string,
+    materialPriceType?: OrderQuoteDto['materialPriceType'],
+  ) {
     if (productCode === 'AYARLI_PERVAZ') {
-      return this.costCalculationService.getAyarliPervazMdfCosts();
+      return materialPriceType
+        ? this.costCalculationService.getAyarliPervazMdfCosts(
+            new Date(),
+            materialPriceType,
+          )
+        : this.costCalculationService.getAyarliPervazMdfCosts();
     }
     if (productCode === 'DEKORATIF_PERVAZ') {
-      return this.costCalculationService.getDekoratifPervazCosts();
+      return materialPriceType
+        ? this.costCalculationService.getDekoratifPervazCosts(
+            new Date(),
+            materialPriceType,
+          )
+        : this.costCalculationService.getDekoratifPervazCosts();
     }
     if (productCode === 'DEKORATIF_PERVAZ_GENIS_KILCIK') {
-      return this.costCalculationService.getDekoratifGenisKilcikCosts();
+      return materialPriceType
+        ? this.costCalculationService.getDekoratifGenisKilcikCosts(
+            new Date(),
+            materialPriceType,
+          )
+        : this.costCalculationService.getDekoratifGenisKilcikCosts();
     }
     throw new BadRequestException('Pervaz ürün kodu geçersiz.');
   }
@@ -288,6 +396,7 @@ export class OrderQuoteService {
         missingMessages: [friendlyExceptionMessage(error)],
         unitCashPrice: null,
         unitCardPrice: null,
+        cardPriceMessage: null,
         saleMissing: true,
       });
     }
@@ -302,6 +411,7 @@ export class OrderQuoteService {
     missingMessages: string[];
     unitCashPrice: string | null;
     unitCardPrice: string | null;
+    cardPriceMessage?: string | null;
     saleMissing: boolean;
   }): OrderQuoteResult {
     const productionCostAvailable =
@@ -339,6 +449,7 @@ export class OrderQuoteService {
       totalCardPrice: cardAvailable
         ? multiplyUnitByQuantity(input.unitCardPrice!, input.dto.quantity)
         : null,
+      cardPriceMessage: cardAvailable ? null : input.cardPriceMessage ?? null,
     };
   }
 }
@@ -347,9 +458,16 @@ function isSupurgelikProductCode(code: string): code is SupurgelikProductCode {
   return (SUPURGELIK_PRODUCT_CODES as readonly string[]).includes(code);
 }
 
-function supurgelikMissingMessages(errorCode: string | null): string[] {
+function supurgelikMissingMessages(
+  errorCode: string | null,
+  materialPriceType: 'CASH' | 'CARD_INSTALLMENT',
+): string[] {
   if (errorCode === 'RAW_MATERIAL_PRICE_MISSING') {
-    return ['MDF fiyatı tanımlı değil.'];
+    return [
+      materialPriceType === 'CASH'
+        ? 'Nakit alış fiyatı tanımlı değil.'
+        : 'Kart/taksitli alış fiyatı tanımlı değil.',
+    ];
   }
   if (errorCode === 'DECORATIVE_RATE_MISSING') {
     return ['Dekoratif oran tanımlı değil.'];
@@ -374,8 +492,12 @@ function firstExceptionMessage(error: HttpException): string {
 function friendlyExceptionMessage(error: HttpException): string {
   const raw = firstExceptionMessage(error);
   const replaced = raw.replace(
-    /\b(CUTTING|GLUE|LABOR|OTHER|CARD_INSTALLMENT)\b/g,
-    (code) => EXTRA_COST_TR[code] ?? 'kart / taksit alış fiyatı',
+    /\b(CUTTING|GLUE|LABOR|OTHER|CARD_INSTALLMENT|CASH)\b/g,
+    (code) => {
+      if (code === 'CARD_INSTALLMENT') return 'kart / taksit alış fiyatı';
+      if (code === 'CASH') return 'peşin alış fiyatı';
+      return EXTRA_COST_TR[code] ?? code;
+    },
   );
   if (replaced.trim().length === 0) return MISSING_SOURCE_MESSAGE;
   return replaced;

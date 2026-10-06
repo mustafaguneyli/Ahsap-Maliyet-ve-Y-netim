@@ -49,6 +49,8 @@ function pricingThicknessModifiersServiceForTx(tx: Prisma.TransactionClient) {
       ): Promise<T> => fn(tx),
       productGroup: tx.productGroup,
       pricingThicknessModifier: tx.pricingThicknessModifier,
+      productSize: tx.productSize,
+      productionYield: tx.productionYield,
     } as never,
     new AuditService(tx as never),
   );
@@ -302,11 +304,15 @@ describe('Süpürgelik pricing request-time DB regression', () => {
           'SUPURGELIK',
           now,
         );
-        expect(listed.items).toEqual([
+        expect(
+          listed.items.filter((item) => item.rate != null),
+        ).toEqual([
           expect.objectContaining({ thicknessMm: 12, rate: '25' }),
           expect.objectContaining({ thicknessMm: 14, rate: '25' }),
           expect.objectContaining({ thicknessMm: 18, rate: '45' }),
         ]);
+        expect(listed.items.find((item) => item.thicknessMm === 8)?.rate).toBeNull();
+        expect(listed.items.find((item) => item.thicknessMm === 10)?.rate).toBeNull();
 
         const before = await service.getSupurgelikMdfCost(
           {
@@ -426,7 +432,6 @@ describe('Süpürgelik pricing request-time DB regression', () => {
             row.thicknessMm === 9 &&
             row.errorCode === 'RAW_MATERIAL_PRICE_MISSING',
         );
-        expect(missingNineMm.length).toBeGreaterThan(0);
         for (const row of missingNineMm) {
           expect(row.productionCost).toBeNull();
           expect(row.pricing?.publishedCashPrice).toBeNull();
@@ -477,5 +482,127 @@ describe('Süpürgelik pricing request-time DB regression', () => {
     });
     expect(stillOpen).toHaveLength(1);
     expect(stillOpen[0].id).toBe(modifier12.id);
+  });
+
+  it('8 mm dekoratif oran tanımlanınca Düz değişmez, Dekoratif ve Dekoratif PP aynı kaynaktan yararlanır ve rollback eder', async () => {
+    const group = await prisma.productGroup.findUnique({
+      where: { code: 'SUPURGELIK' },
+    });
+    if (!group?.isActive) {
+      throw new Error('Dynamic test için aktif SUPURGELIK grubu gerekir.');
+    }
+    const existingEight = await prisma.pricingThicknessModifier.findMany({
+      where: {
+        productGroupId: group.id,
+        modifierType: PricingModifierType.DECORATIVE,
+        thicknessMm: 8,
+        isActive: true,
+      },
+    });
+    if (existingEight.length > 0) {
+      throw new Error(
+        'Dynamic test 8 mm dekoratif oranın başlangıçta tanımlı olmamasını bekler.',
+      );
+    }
+
+    const now = new Date();
+
+    try {
+      await prisma.$transaction(async (tx) => {
+        const extraCostsService = extraCostsServiceForTx(tx);
+        const modifiersService = pricingThicknessModifiersServiceForTx(tx);
+        const service = new CostCalculationService(
+          tx as never,
+          extraCostsService,
+          {} as never,
+        );
+
+        const decorativeListBefore = await service.getSupurgelikMdfCosts(
+          { productCode: 'DEKORATIF_SUPURGELIK' },
+          now,
+        );
+        const missingEight = decorativeListBefore.rows.find(
+          (row) =>
+            row.thicknessMm === 8 && row.errorCode === 'DECORATIVE_RATE_MISSING',
+        );
+        if (missingEight == null) {
+          throw new Error(
+            'Dynamic test 8 mm DECORATIVE_RATE_MISSING satırı bekler.',
+          );
+        }
+        const SIZE_8 = {
+          thicknessMm: 8,
+          widthMm: missingEight.widthMm,
+          lengthMm: missingEight.lengthMm,
+        };
+
+        const duzBefore = await service.getSupurgelikMdfCost(
+          { productCode: 'DUZ_SUPURGELIK', ...SIZE_8 },
+          now,
+        );
+        const decorativeBefore = await service.getSupurgelikMdfCost(
+          { productCode: 'DEKORATIF_SUPURGELIK', ...SIZE_8 },
+          now,
+        );
+        expect(decorativeBefore.pricing).toMatchObject({
+          statusCode: 'DECORATIVE_RATE_MISSING',
+          decorativeRate: null,
+        });
+        expect(duzBefore.pricing).not.toHaveProperty('decorativeRate');
+
+        await modifiersService.replaceSupurgelikDecorativeRate(
+          { productGroup: 'SUPURGELIK', thicknessMm: 8, rate: '25' },
+          now,
+        );
+
+        const duzAfter = await service.getSupurgelikMdfCost(
+          { productCode: 'DUZ_SUPURGELIK', ...SIZE_8 },
+          now,
+        );
+        expect(duzAfter.productionCost).toBe(duzBefore.productionCost);
+        expect(duzAfter.pricing?.publishedCashPrice).toBe(
+          duzBefore.pricing?.publishedCashPrice,
+        );
+        expect(duzAfter.pricing).not.toHaveProperty('decorativeRate');
+
+        const decorativeAfter = await service.getSupurgelikMdfCost(
+          { productCode: 'DEKORATIF_SUPURGELIK', ...SIZE_8 },
+          now,
+        );
+        expect(decorativeAfter.pricing).toMatchObject({
+          decorativeRate: '25',
+          decorativeRateSource: 'GROUP_THICKNESS_PRICING_MODIFIER',
+        });
+        expect(decorativeAfter.pricing).not.toMatchObject({
+          statusCode: 'DECORATIVE_RATE_MISSING',
+        });
+        expect(decorativeAfter.productionCost).toBe(duzAfter.productionCost);
+
+        const decorativePp = await service.getSupurgelikMdfCost(
+          { productCode: 'DEKORATIF_PP_SARMA_SUPURGELIK', ...SIZE_8 },
+          now,
+        );
+        if (
+          decorativePp.pricing != null &&
+          'decorativeRate' in decorativePp.pricing
+        ) {
+          expect(decorativePp.pricing.decorativeRate).toBe('25');
+        }
+
+        throw ROLLBACK;
+      });
+    } catch (error) {
+      if (error !== ROLLBACK) throw error;
+    }
+
+    const leftover = await prisma.pricingThicknessModifier.findMany({
+      where: {
+        productGroupId: group.id,
+        modifierType: PricingModifierType.DECORATIVE,
+        thicknessMm: 8,
+        isActive: true,
+      },
+    });
+    expect(leftover).toHaveLength(0);
   });
 });

@@ -18,7 +18,13 @@ export type SupurgelikExtraCostInput = {
 
 export type SupurgelikDuzPricingInput = {
   profitRate: string;
-  source: 'GROUP_PRICING_SETTING';
+  source:
+    | 'SIZE_OVERRIDE'
+    | 'PRODUCT_OVERRIDE'
+    | 'ROW_EXCEPTION'
+    | 'PRODUCT_PRICING_SETTING'
+    | 'GROUP_PRICING_SETTING'
+    | 'GLOBAL_PRICING_SETTING';
 };
 
 export type SupurgelikDecorativePricingInput = SupurgelikDuzPricingInput & {
@@ -111,7 +117,7 @@ export type SupurgelikMdfInput = {
     sheetLengthMm: number;
   };
   sheetPrice: {
-    priceType: 'CARD_INSTALLMENT';
+    priceType: 'CASH' | 'CARD_INSTALLMENT';
     amount: string;
   };
   productionYield: {
@@ -163,9 +169,12 @@ export type SupurgelikMdfResult = {
  */
 export class SupurgelikMdfCalculator {
   calculate(input: SupurgelikMdfInput): SupurgelikMdfResult {
-    if (input.sheetPrice.priceType !== 'CARD_INSTALLMENT') {
+    if (
+      input.sheetPrice.priceType !== 'CASH' &&
+      input.sheetPrice.priceType !== 'CARD_INSTALLMENT'
+    ) {
       throw new BadRequestException(
-        'Süpürgelik MDF maliyeti yalnız CARD_INSTALLMENT alış fiyatı kullanır.',
+        'Süpürgelik MDF alış türü CASH veya CARD_INSTALLMENT olmalıdır.',
       );
     }
     if (!Number.isInteger(input.productionYield.netQty) || input.productionYield.netQty <= 0) {
@@ -415,7 +424,7 @@ export class SupurgelikMdfCalculator {
     baseResult: SupurgelikMdfResult,
     basePricing: {
       profitRate: string;
-      source: 'GROUP_PRICING_SETTING';
+      source: SupurgelikDuzPricingInput['source'];
       profitAmount: string;
       priceBeforeRounding: string;
       roundedBaseSalePrice: string;

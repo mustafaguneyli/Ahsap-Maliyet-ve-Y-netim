@@ -12,7 +12,7 @@ const group = {
 
 const NOW = new Date('2026-09-14T12:00:00.000Z');
 
-function modifier(id: string, thicknessMm: 12 | 14 | 18, rate: string) {
+function modifier(id: string, thicknessMm: number, rate: string) {
   return {
     id,
     productGroupId: group.id,
@@ -25,8 +25,32 @@ function modifier(id: string, thicknessMm: 12 | 14 | 18, rate: string) {
   };
 }
 
+function catalogPrisma() {
+  return {
+    productSize: {
+      findMany: jest.fn().mockResolvedValue([{ widthMm: 120, lengthMm: 2800 }]),
+    },
+    productionYield: {
+      findMany: jest.fn().mockResolvedValue(
+        [8, 9, 10, 12, 14, 18].map((thicknessMm) => ({
+          productId: null,
+          isActive: true,
+          pieceWidthMm: 120,
+          pieceLengthMm: 2800,
+          rawMaterial: {
+            isActive: true,
+            code: `MDF-${thicknessMm}`,
+            thicknessMm: String(thicknessMm),
+            sheetLengthMm: 2800,
+          },
+        })),
+      ),
+    },
+  };
+}
+
 describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
-  it('GET yalnız aktif 12/14/18 mm oranlarını döndürür; 8/9/10 üretmez', async () => {
+  it('GET tanımlı 12/14/18 oranlarını ve katalogdaki eksik 8/9/10 mm satırlarını döner', async () => {
     const rows = [
       modifier('mod-12', 12, '25'),
       modifier('mod-14', 14, '25'),
@@ -35,6 +59,7 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
     const prisma = {
       productGroup: { findUnique: jest.fn().mockResolvedValue(group) },
       pricingThicknessModifier: { findMany: jest.fn().mockResolvedValue(rows) },
+      ...catalogPrisma(),
     };
     const service = new PricingThicknessModifiersService(
       prisma as never,
@@ -47,6 +72,9 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
       productGroupCode: 'SUPURGELIK',
       productGroupName: 'Süpürgelik',
       items: [
+        { modifierId: null, thicknessMm: 8, rate: null, isActive: false },
+        { modifierId: null, thicknessMm: 9, rate: null, isActive: false },
+        { modifierId: null, thicknessMm: 10, rate: null, isActive: false },
         { modifierId: 'mod-12', thicknessMm: 12, rate: '25', isActive: true },
         { modifierId: 'mod-14', thicknessMm: 14, rate: '25', isActive: true },
         { modifierId: 'mod-18', thicknessMm: 18, rate: '45', isActive: true },
@@ -56,7 +84,6 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
       where: {
         productGroupId: group.id,
         modifierType: PricingModifierType.DECORATIVE,
-        thicknessMm: { in: [12, 14, 18] },
         isActive: true,
         effectiveFrom: { lte: NOW },
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: NOW } }],
@@ -74,6 +101,7 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
           modifier('mod-12-b', 12, '26'),
         ]),
       },
+      ...catalogPrisma(),
     };
     const service = new PricingThicknessModifiersService(
       prisma as never,
@@ -106,6 +134,7 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
           modifier('mod-18', 18, '45'),
         ]),
       },
+      ...catalogPrisma(),
     };
     const audit = { record: jest.fn().mockResolvedValue({}) };
     const service = new PricingThicknessModifiersService(
@@ -142,7 +171,6 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
       modifierId: 'mod-12-new',
       rate: '26',
     });
-    expect(result.items.map((item) => item.thicknessMm)).toEqual([12, 14, 18]);
   });
 
   it('PATCH 25→25 same-value no-op: history/audit yazılmaz', async () => {
@@ -165,6 +193,7 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
           modifier('mod-18', 18, '45'),
         ]),
       },
+      ...catalogPrisma(),
     };
     const audit = { record: jest.fn() };
     const service = new PricingThicknessModifiersService(
@@ -183,27 +212,106 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
     expect(result.items.find((item) => item.thicknessMm === 12)?.rate).toBe('25');
   });
 
-  it.each(['0', '-1'])(
-    'PATCH geçersiz dekoratif oran %s reddedilir; history/audit yok',
-    async (rate) => {
-      const prisma = { $transaction: jest.fn() };
-      const audit = { record: jest.fn() };
-      const service = new PricingThicknessModifiersService(
-        prisma as never,
-        audit as never,
-      );
+  it('PATCH 8 mm eksik oranı oluşturur; 0 uydurmaz, verilen 25 yazılır', async () => {
+    const created = modifier('mod-8-new', 8, '25');
+    const tx = {
+      productGroup: { findUnique: jest.fn().mockResolvedValue(group) },
+      pricingThicknessModifier: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+        create: jest.fn().mockResolvedValue(created),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(tx)),
+      productGroup: { findUnique: jest.fn().mockResolvedValue(group) },
+      pricingThicknessModifier: {
+        findMany: jest.fn().mockResolvedValue([
+          created,
+          modifier('mod-12', 12, '25'),
+          modifier('mod-14', 14, '25'),
+          modifier('mod-18', 18, '45'),
+        ]),
+      },
+      ...catalogPrisma(),
+    };
+    const audit = { record: jest.fn().mockResolvedValue({}) };
+    const service = new PricingThicknessModifiersService(
+      prisma as never,
+      audit as never,
+    );
 
-      await expect(
-        service.replaceSupurgelikDecorativeRate({
-          productGroup: 'SUPURGELIK',
-          thicknessMm: 12,
-          rate,
-        }),
-      ).rejects.toBeInstanceOf(BadRequestException);
-      expect(prisma.$transaction).not.toHaveBeenCalled();
-      expect(audit.record).not.toHaveBeenCalled();
-    },
-  );
+    const result = await service.replaceSupurgelikDecorativeRate(
+      { productGroup: 'SUPURGELIK', thicknessMm: 8, rate: '25' },
+      NOW,
+    );
+
+    expect(tx.pricingThicknessModifier.update).not.toHaveBeenCalled();
+    expect(tx.pricingThicknessModifier.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        productGroupId: group.id,
+        thicknessMm: 8,
+        isActive: true,
+      }),
+    });
+    expect(result.items.find((item) => item.thicknessMm === 8)).toMatchObject({
+      modifierId: 'mod-8-new',
+      rate: '25',
+    });
+    expect(result.items.find((item) => item.thicknessMm === 10)?.rate).toBeNull();
+  });
+
+  it('PATCH %0 geçerli: kart/dekoratif 0 uydurma değil, açık 0 yazılır', async () => {
+    const created = modifier('mod-8-zero', 8, '0');
+    const tx = {
+      productGroup: { findUnique: jest.fn().mockResolvedValue(group) },
+      pricingThicknessModifier: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update: jest.fn(),
+        create: jest.fn().mockResolvedValue(created),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback) => callback(tx)),
+      productGroup: { findUnique: jest.fn().mockResolvedValue(group) },
+      pricingThicknessModifier: {
+        findMany: jest.fn().mockResolvedValue([created]),
+      },
+      ...catalogPrisma(),
+    };
+    const audit = { record: jest.fn().mockResolvedValue({}) };
+    const service = new PricingThicknessModifiersService(
+      prisma as never,
+      audit as never,
+    );
+
+    const result = await service.replaceSupurgelikDecorativeRate(
+      { productGroup: 'SUPURGELIK', thicknessMm: 8, rate: '0' },
+      NOW,
+    );
+
+    expect(tx.pricingThicknessModifier.create).toHaveBeenCalled();
+    expect(result.items.find((item) => item.thicknessMm === 8)?.rate).toBe('0');
+  });
+
+  it('PATCH negatif dekoratif oran reddedilir; history/audit yok', async () => {
+    const prisma = { $transaction: jest.fn() };
+    const audit = { record: jest.fn() };
+    const service = new PricingThicknessModifiersService(
+      prisma as never,
+      audit as never,
+    );
+
+    await expect(
+      service.replaceSupurgelikDecorativeRate({
+        productGroup: 'SUPURGELIK',
+        thicknessMm: 12,
+        rate: '-1',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
 
   it('PATCH geçersiz Decimal reddedilir; history/audit yok', async () => {
     const prisma = { $transaction: jest.fn() };
@@ -220,25 +328,6 @@ describe('PricingThicknessModifiersService SUPURGELIK decorative rates', () => {
         rate: 'abc',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(audit.record).not.toHaveBeenCalled();
-  });
-
-  it('PATCH 8 mm oran oluşturmaz', async () => {
-    const prisma = { $transaction: jest.fn() };
-    const audit = { record: jest.fn() };
-    const service = new PricingThicknessModifiersService(
-      prisma as never,
-      audit as never,
-    );
-
-    await expect(
-      service.replaceSupurgelikDecorativeRate({
-        productGroup: 'SUPURGELIK',
-        thicknessMm: 8 as 12,
-        rate: '25',
-      }),
-    ).rejects.toThrow('yalnız 12, 14 veya 18 mm');
     expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(audit.record).not.toHaveBeenCalled();
   });

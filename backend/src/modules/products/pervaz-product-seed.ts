@@ -39,6 +39,7 @@ export async function seedPervazProducts(
       data: {
         code: PRODUCT_GROUP.code,
         name: PRODUCT_GROUP.name,
+        calculatorType: 'PERVAZ',
         isActive: true,
       },
     });

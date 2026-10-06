@@ -1,65 +1,54 @@
-import { BadRequestException } from '@nestjs/common';
-import { toDecimal } from '../../common/decimal/decimal.util';
+import {
+  applyPercentCardSale,
+  CARD_MARKUP_RATE_MISSING,
+  CARD_MARKUP_RATE_MISSING_TR,
+} from '../pricing/percent-card-sale';
 
-export type PervazCardPricingType = 'FIXED_SURCHARGE' | 'NONE';
+export type PervazCardPricingType = 'PERCENT_MARKUP' | 'NONE';
 
 export type PervazCardSaleBreakdown = {
   cardSaleAvailable: boolean;
   cardPricingType: PervazCardPricingType;
-  cardFixedSurchargeAmount: string | null;
+  cardMarkupRate: string | null;
   cardSalePrice: string | null;
+  cardStatusCode: typeof CARD_MARKUP_RATE_MISSING | null;
+  cardStatusMessage: string | null;
 };
 
-function parseOptionalNonNegativeAmount(
-  value: string | null | undefined,
-): string | null {
-  if (value == null || value === '') {
-    return null;
-  }
-  let amount;
-  try {
-    amount = toDecimal(value);
-  } catch {
-    throw new BadRequestException(
-      `Pervaz cardFixedSurchargeAmount geçersiz: ${value}`,
-    );
-  }
-  if (amount.isNegative()) {
-    throw new BadRequestException(
-      `Pervaz cardFixedSurchargeAmount negatif olamaz: ${value}`,
-    );
-  }
-  return amount.toFixed();
-}
-
 /**
- * Pervaz kart/taksit: publishedCashPrice + cardFixedSurchargeAmount.
- * Yüzde kart farkı kullanılmaz. Kartta ROUNDUP yoktur.
+ * Pervaz kart/taksit: publishedCashPrice × (1 + cardMarkupRate/100).
+ * Kartta ek ROUNDUP yoktur. Oran yoksa kart null; nakit durur.
  */
-export function applyPervazFixedCardSale(input: {
+export function applyPervazPercentCardSale(input: {
   publishedCashPrice: string;
-  cardFixedSurchargeAmount?: string | null;
+  cardMarkupRate?: string | null;
   cardSaleAvailable: boolean;
 }): PervazCardSaleBreakdown {
-  const amount = parseOptionalNonNegativeAmount(input.cardFixedSurchargeAmount);
   if (!input.cardSaleAvailable) {
     return {
       cardSaleAvailable: false,
       cardPricingType: 'NONE',
-      cardFixedSurchargeAmount: amount,
+      cardMarkupRate: null,
       cardSalePrice: null,
+      cardStatusCode: null,
+      cardStatusMessage: null,
     };
   }
-  if (amount == null) {
-    throw new BadRequestException(
-      'Pervaz kart satışı açık ama cardFixedSurchargeAmount eksik.',
-    );
-  }
-  const publishedCashPrice = toDecimal(input.publishedCashPrice);
+
+  const card = applyPercentCardSale({
+    cashPrice: input.publishedCashPrice,
+    cardMarkupRate: input.cardMarkupRate,
+    rounding: 'none',
+  });
+
   return {
     cardSaleAvailable: true,
-    cardPricingType: 'FIXED_SURCHARGE',
-    cardFixedSurchargeAmount: amount,
-    cardSalePrice: publishedCashPrice.plus(toDecimal(amount)).toFixed(),
+    cardPricingType: card.cardSalePrice != null ? 'PERCENT_MARKUP' : 'NONE',
+    cardMarkupRate: card.cardMarkupRate,
+    cardSalePrice: card.cardSalePrice,
+    cardStatusCode: card.statusCode,
+    cardStatusMessage: card.statusMessage,
   };
 }
+
+export { CARD_MARKUP_RATE_MISSING, CARD_MARKUP_RATE_MISSING_TR };

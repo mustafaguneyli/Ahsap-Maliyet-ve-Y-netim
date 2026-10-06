@@ -1,14 +1,9 @@
 import { apiRequest } from '../lib/api';
 
-export const SUPURGELIK_DECORATIVE_RATE_THICKNESSES = [12, 14, 18] as const;
-
-export type SupurgelikDecorativeRateThickness =
-  (typeof SUPURGELIK_DECORATIVE_RATE_THICKNESSES)[number];
-
 export type SupurgelikDecorativeRateItem = {
-  modifierId: string;
-  thicknessMm: SupurgelikDecorativeRateThickness;
-  rate: string;
+  modifierId: string | null;
+  thicknessMm: number;
+  rate: string | null;
   isActive: boolean;
 };
 
@@ -25,7 +20,7 @@ export function listSupurgelikDecorativeRates() {
 }
 
 export function updateSupurgelikDecorativeRate(
-  thicknessMm: SupurgelikDecorativeRateThickness,
+  thicknessMm: number,
   rate: string,
 ) {
   return apiRequest<SupurgelikDecorativeRatesResponse>(
@@ -44,8 +39,5 @@ export function updateSupurgelikDecorativeRate(
 export function selectSupurgelikDecorativeRates(
   items: SupurgelikDecorativeRateItem[],
 ): SupurgelikDecorativeRateItem[] {
-  const allowed = new Set<number>(SUPURGELIK_DECORATIVE_RATE_THICKNESSES);
-  return items
-    .filter((item) => allowed.has(item.thicknessMm) && item.isActive)
-    .sort((left, right) => left.thicknessMm - right.thicknessMm);
+  return [...items].sort((left, right) => left.thicknessMm - right.thicknessMm);
 }

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>Üretim formu TASLAK</title>
+  <style>
+    @page { size: A5 portrait; margin: 6mm 5mm; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: #fff; color: #000; font-family: Calibri, "Segoe UI", sans-serif; font-size: 8.5px; }
+    .sheet { width: 100%; page-break-after: always; break-after: page; }
+    .sheet:last-child { page-break-after: auto; break-after: auto; }
+    .workshop-head { display: flex; gap: 8px; align-items: center; margin-bottom: 3mm; }
+    .logo { width: 48px; height: auto; }
+    .company { font-size: 12px; font-weight: 700; }
+    .doc-title { font-size: 11px; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border: 1px solid #000; padding: 2px 3px; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+    th { text-align: left; font-size: 8px; }
+    .center { text-align: center; }
+    h2 { font-size: 10px; margin: 3mm 0 1.5mm; page-break-after: avoid; }
+    .warn { font-weight: 700; }
+    .lines { page-break-inside: auto; }
+    .lines tr { page-break-inside: avoid; break-inside: avoid; }
+  
+    .print-bar { margin: 0 0 8px; }
+    .print-bar button { font: inherit; padding: 6px 10px; }
+    @media print { .print-bar { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="print-bar"><button type="button" onclick="window.print()">Yazdır / PDF kaydet</button><span> Açılan pencerede hedef olarak PDF kaydetmeyi seçin.</span></div>
+  <section class="sheet workshop">
+    <header class="workshop-head">
+      <img class="logo" alt="Zirve Ahşap" src="data:image/jpeg;base64,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74pfzXlbUPEV59qum3fw78L8orzz9qn9mDSP2oPB1lpV3qL6NqWn3H2iy1RY/O8rdw6Mm5dysvbcPurXutFAHz7efsf+Gtd+Adl8Mde1O8v4IIoYTrdrbwW96yROrou7Y/8AdVf4qw/EX7D+gy/s1y/B3QvEeoafpr6guoRajqKJdyq3m73Xanlbq+nqKAPFfh1+zVpHgH9ny9+EP9rahfaNeWd5ZT3zhEuCl1v83YNu1fvtt+9WL8Kv2N/DHwa8BeK/CvhzxF4ptofEDRPLqKX6RXts6fdaGWKJNn/j1fQlFAH5/eMf2ENV8efFLRf7efxn4n8NQN9nudT8T+KbV5Yot/34tkTv839zan+/XpvxY/4J/eHfHXj7wp4q0LxBc+ErnQYLW1McNut156WyqlvzK33lVFX5926vrSj+CgD57+PH7FPgX9oGXQpdcudS0dtJiliQ6H9nt/N37NzPuif+5SfHD9i3wZ8fdP8ACVn4g1TW7OHw1aNZWY06eJNyFUX598T/APPJa+haKAOW8D/Dvw78NtEg03w9o1jpUEUaxf6JaxRPLtXhn2Ku5q6mj+CigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKP4KKKACiiigA/gooooAKKKKACiiigAooooA//9k=" />
+      <div>
+        <div class="company">ZİRVE AHŞAP</div>
+        <div class="doc-title">ÜRETİM FORMU</div>
+        <div>Sipariş no: TASLAK</div>
+        
+      </div>
+    </header>
+    <table class="lines">
+      <thead>
+        <tr>
+          <th>S.NO</th>
+          <th>ÜRÜN ADI</th>
+          <th>MODEL / TÜR</th>
+          <th>ÖLÇÜ</th>
+          <th>KALINLIK</th>
+          <th>DEKOR / RENK</th>
+          <th>ÜRETİM NOTU</th>
+          <th>MİKTAR</th>
+          <th>BİRİM</th>
+          <th>MALZEME</th>
+        </tr>
+      </thead>
+      <tbody><tr>
+        <td class="center">1</td>
+        <td>Kapı İmalatı 210 × 90 cm</td>
+        <td>Kapı İmalatı (taslak)</td>
+        <td>900×2100 mm</td>
+        <td>8 mm</td>
+        <td>Zımparalı</td>
+        <td>En Katsayısı: x1</td>
+        <td class="center">3</td>
+        <td class="center">ADET</td>
+        <td></td>
+      </tr></tbody>
+    </table>
+    <h2>Ürün bazlı malzeme listesi</h2>
+    <table class="lines">
+      <thead>
+        <tr>
+          <th>Satır</th><th>Parça</th><th>Malzeme</th><th>Kalınlık mm</th><th>Tabaka ebadı</th>
+          <th>Yüzey</th><th>Parça adedi</th><th>Tabaka ihtiyacı</th><th>Birim</th><th>Kaynak</th><th>Not</th>
+        </tr>
+      </thead>
+      <tbody><tr>
+        <td>1</td>
+        <td>MDF yüzeyi</td>
+        <td>08 MM MDF 210×280 Zımparalı</td>
+        <td>8</td>
+        <td>2100×2800 mm</td>
+        <td>Zımparalı</td>
+        <td>6</td>
+        <td>2</td>
+        <td>TABAKA</td>
+        <td>Manuel</td>
+        <td>Yüzey adedi 6; tam tabaka 2.</td>
+      </tr><tr>
+        <td>1</td>
+        <td>Kapı kasası</td>
+        <td>34 MM MDF Kasa 10×210</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td>7,50</td>
+        <td></td>
+        <td>BOY</td>
+        <td>Manuel</td>
+        <td>Kapı başına 2.5 boy (doğrulanmış 210 cm kuralı). Toplam 7.5 boy.</td>
+      </tr><tr>
+        <td>1</td>
+        <td>Yan pervaz</td>
+        <td>Ayarlı Pervaz 12 mm · 100×2200</td>
+        <td>12</td>
+        <td></td>
+        <td></td>
+        <td>12</td>
+        <td></td>
+        <td>ADET</td>
+        <td>Manuel</td>
+        <td>Kapı başına 4 yan pervaz (başlık hariç).</td>
+      </tr><tr>
+        <td>1</td>
+        <td>Başlık</td>
+        <td>Ayarlı Pervaz 12 mm · 100×2200</td>
+        <td>12</td>
+        <td></td>
+        <td></td>
+        <td>3</td>
+        <td></td>
+        <td>ADET</td>
+        <td>Manuel</td>
+        <td>Kapı başına 1 başlık.</td>
+      </tr></tbody>
+    </table>
+    <h2>Malzeme özeti</h2>
+    <p>Aynı malzeme kimliği ve birimi toplanır. Kalınlık, tabaka ebadı veya yüzey farklıysa satırlar ayrı kalır. Tabaka hücresi boşsa tabaka ihtiyacı doğrulanmamıştır.</p>
+    <table class="lines">
+      <thead>
+        <tr>
+          <th>Malzeme</th><th>Kalınlık mm</th><th>Tabaka ebadı</th><th>Yüzey</th>
+          <th>Parça toplamı</th><th>Tabaka toplamı</th><th>Birim</th>
+        </tr>
+      </thead>
+      <tbody><tr>
+        <td>08 MM MDF 210×280 Zımparalı</td>
+        <td>8</td>
+        <td>2100×2800 mm</td>
+        <td>Zımparalı</td>
+        <td>6</td>
+        <td>2</td>
+        <td>TABAKA</td>
+      </tr><tr>
+        <td>34 MM MDF Kasa 10×210</td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td>7,50</td>
+        <td></td>
+        <td>BOY</td>
+      </tr><tr>
+        <td>Ayarlı Pervaz 12 mm · 100×2200</td>
+        <td>12</td>
+        <td></td>
+        <td></td>
+        <td>15</td>
+        <td></td>
+        <td>ADET</td>
+      </tr></tbody>
+    </table>
+  </section>
+</body>
+</html>

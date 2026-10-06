@@ -165,6 +165,70 @@ describe('resolveAyarliPervazProfitRate', () => {
       }),
     ).toThrow(NotFoundException);
   });
+
+  it('SIZE_OVERRIDE aynı ürünün diğer ölçüsünü ezmez; ROW_EXCEPTION’dan önce gelir', () => {
+    const ten = resolveAyarliPervazProfitRate({
+      now,
+      rowExceptions: [
+        {
+          isActive: true,
+          effectiveFrom: from,
+          effectiveTo: null,
+          profitRate: { toString: () => '20' },
+        },
+      ],
+      sizeOverrides: [
+        {
+          isActive: true,
+          effectiveFrom: from,
+          effectiveTo: null,
+          profitRate: { toString: () => '25' },
+        },
+      ],
+      productSettings: [productSetting15],
+    });
+    expect(ten).toEqual({ profitRate: '25', source: 'SIZE_OVERRIDE' });
+
+    const twelve = resolveAyarliPervazProfitRate({
+      now,
+      rowExceptions: [],
+      sizeOverrides: [],
+      productSettings: [productSetting15],
+    });
+    expect(twelve).toEqual({ profitRate: '15', source: 'PRODUCT_PRICING_SETTING' });
+  });
+
+  it('profitRate 0 geçerli SIZE_OVERRIDE’dır; boş/null fallback’e düşer', () => {
+    const zero = resolveAyarliPervazProfitRate({
+      now,
+      rowExceptions: [],
+      sizeOverrides: [
+        {
+          isActive: true,
+          effectiveFrom: from,
+          effectiveTo: null,
+          profitRate: { toString: () => '0' },
+        },
+      ],
+      productSettings: [productSetting15],
+    });
+    expect(zero).toEqual({ profitRate: '0', source: 'SIZE_OVERRIDE' });
+
+    const blank = resolveAyarliPervazProfitRate({
+      now,
+      rowExceptions: [],
+      sizeOverrides: [
+        {
+          isActive: true,
+          effectiveFrom: from,
+          effectiveTo: null,
+          profitRate: null,
+        },
+      ],
+      productSettings: [productSetting15],
+    });
+    expect(blank).toEqual({ profitRate: '15', source: 'PRODUCT_PRICING_SETTING' });
+  });
 });
 
 describe('resolveAyarliPervazAdjustment', () => {

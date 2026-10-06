@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import {
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -7,6 +8,7 @@ import {
   Matches,
   Min,
 } from 'class-validator';
+import { CITA_MATERIAL_PRICE_TYPES } from '../../../calculation-engine/calculators/cita-mdf-calculator';
 
 const POSITIVE_MM = /^\d+(?:\.\d+)?$/;
 
@@ -31,4 +33,11 @@ export class OrderQuoteDto {
   @IsNotEmpty({ message: 'lengthMm zorunludur.' })
   @Matches(POSITIVE_MM, { message: 'lengthMm geçerli bir mm değeri olmalıdır.' })
   lengthMm!: string;
+
+  /** MDF alış türü. Yoksa CARD_INSTALLMENT. Satış kart yüzdesinden ayrıdır. */
+  @IsOptional()
+  @IsIn(CITA_MATERIAL_PRICE_TYPES, {
+    message: 'materialPriceType CASH veya CARD_INSTALLMENT olmalıdır.',
+  })
+  materialPriceType?: (typeof CITA_MATERIAL_PRICE_TYPES)[number];
 }

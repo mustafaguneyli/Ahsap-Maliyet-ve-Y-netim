@@ -5,6 +5,7 @@ import {
   CITA_NET_PRODUCT_CODE,
   parseCitaThicknessMm,
 } from '../../calculation-engine/calculators/cita-net-calculator';
+import type { CitaMaterialPriceType } from '../../calculation-engine/calculators/cita-mdf-calculator';
 import type { CitaProductionResult } from '../../calculation-engine/calculators/cita-production-calculator';
 import {
   CITA_PRODUCT_GROUP_SEED,
@@ -14,6 +15,11 @@ import {
   discoverActiveProductMasterRows,
   type ActiveProductMasterRow,
 } from '../production-yields/active-product-master-discovery';
+import { loadCardMarkupRate } from '../pricing/card-markup-rate.resolver';
+import {
+  loadProfitRateCatalog,
+  resolveCatalogProfitRate,
+} from '../pricing/profit-rate-catalog';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   attachCitaListPricing,
@@ -56,17 +62,27 @@ export type CitaListPriceMissingRow = {
   extraCostsAvailable: false;
   missingExtraCosts: CitaProductionResult['missingExtraCosts'];
   statusCode: typeof CITA_RAW_MATERIAL_PRICE_MISSING;
+  cuttingBatchCost: null;
+  cuttingUnitCost: null;
+  materialPriceType: CitaMaterialPriceType;
 };
 
 export type CitaListCostRow = CitaProductionResult | CitaListPriceMissingRow;
 export type CitaListRow = CitaListCostRow & { pricing: CitaListPricing };
 
-function toCitaQuery(master: ActiveProductMasterRow): CitaNetQueryDto {
-  return {
+function toCitaQuery(
+  master: ActiveProductMasterRow,
+  materialPriceType: CitaMaterialPriceType,
+): CitaNetQueryDto {
+  const query: CitaNetQueryDto = {
     thicknessMm: decimalToString(toDecimal(master.thicknessMm)),
     widthMm: decimalToString(toDecimal(master.widthMm)),
     lengthMm: decimalToString(toDecimal(master.lengthMm)),
   };
+  if (materialPriceType !== 'CARD_INSTALLMENT') {
+    query.materialPriceType = materialPriceType;
+  }
+  return query;
 }
 
 function compareCitaMasters(
@@ -109,7 +125,10 @@ function assertMasterSource(
   }
 }
 
-function priceMissingRow(net: CitaNetResult): CitaListPriceMissingRow {
+function priceMissingRow(
+  net: CitaNetResult,
+  materialPriceType: CitaMaterialPriceType,
+): CitaListPriceMissingRow {
   assertMasterSource(net.thicknessMm, net.widthMm, net.lengthMm, net.source);
   return {
     productCode: net.productCode,
@@ -139,6 +158,9 @@ function priceMissingRow(net: CitaNetResult): CitaListPriceMissingRow {
     extraCostsAvailable: false,
     missingExtraCosts: [],
     statusCode: CITA_RAW_MATERIAL_PRICE_MISSING,
+    cuttingBatchCost: null,
+    cuttingUnitCost: null,
+    materialPriceType,
   };
 }
 
@@ -155,7 +177,10 @@ export class CitaListService {
    * Kalınlık/en dizisi hardcode edilmez. Custom ölçü listeye girmez.
    * Satır bazlı ExtraCost / MDF fiyat eksikliği tüm listeyi düşürmez.
    */
-  async listProductionCosts(now: Date = new Date()) {
+  async listProductionCosts(
+    now: Date = new Date(),
+    materialPriceType: CitaMaterialPriceType = 'CARD_INSTALLMENT',
+  ) {
     const { product, rows: masters } = await discoverActiveProductMasterRows(
       this.prisma,
       {
@@ -169,17 +194,61 @@ export class CitaListService {
     }
 
     const bands = await loadCitaPublishedPriceBandViews(this.prisma, now);
+    const cardMarkupRate = await loadCardMarkupRate(this.prisma, CITA_PRODUCT_GROUP_SEED.code);
+    const profitCatalog = await loadProfitRateCatalog(
+      this.prisma,
+      product.id,
+      product.productGroupId,
+    );
+    const uniqueSizes = [
+      ...new Map(
+        masters.map((master) => [
+          `${master.widthMm}x${master.lengthMm}`,
+          { widthMm: master.widthMm, lengthMm: master.lengthMm },
+        ]),
+      ).values(),
+    ];
+    const productSizes =
+      uniqueSizes.length === 0
+        ? []
+        : await this.prisma.productSize.findMany({
+            where: { OR: uniqueSizes },
+          });
+    const sizeIdByMm = new Map(
+      productSizes.map((size) => [`${size.widthMm}x${size.lengthMm}`, size.id]),
+    );
     const sorted = [...masters].sort(compareCitaMasters);
     const rows: CitaListRow[] = [];
     for (const master of sorted) {
-      const costRow = await this.calculateMasterRow(master, now);
-      rows.push(attachCitaListPricing(costRow, bands));
+      const costRow = await this.calculateMasterRow(
+        master,
+        now,
+        materialPriceType,
+      );
+      const priced = attachCitaListPricing(costRow, bands, cardMarkupRate);
+      const resolvedProfit = resolveCatalogProfitRate({
+        catalog: profitCatalog,
+        now,
+        productCode: product.code,
+        productSizeId:
+          sizeIdByMm.get(`${master.widthMm}x${master.lengthMm}`) ?? null,
+        required: false,
+      });
+      rows.push({
+        ...priced,
+        pricing: {
+          ...priced.pricing,
+          profitRate: resolvedProfit.profitRate,
+          profitRateSource: resolvedProfit.source,
+        },
+      });
     }
 
     return {
       productCode: product.code,
       productName: product.name,
       asOf: now.toISOString(),
+      materialPriceType,
       verifiedMeasureCount: rows.length,
       rows,
     };
@@ -188,8 +257,9 @@ export class CitaListService {
   private async calculateMasterRow(
     master: ActiveProductMasterRow,
     now: Date,
+    materialPriceType: CitaMaterialPriceType,
   ): Promise<CitaListCostRow> {
-    const query = toCitaQuery(master);
+    const query = toCitaQuery(master, materialPriceType);
     try {
       const result = await this.citaProductionService.getProductionCost(
         query,
@@ -205,7 +275,7 @@ export class CitaListService {
     } catch (error) {
       if (error instanceof CitaRawMaterialPriceMissingException) {
         const net = await this.citaNetService.resolveNet(query);
-        return priceMissingRow(net);
+        return priceMissingRow(net, error.materialPriceType);
       }
       throw error;
     }

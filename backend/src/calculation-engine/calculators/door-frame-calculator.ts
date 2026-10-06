@@ -1,5 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { roundUpToWholeTl, toDecimal } from '../../common/decimal/decimal.util';
+import { applyPercentCardSale } from '../pricing/percent-card-sale';
 import { calculateDoorFrameSuggestedQty } from '../../modules/production-yields/production-yield-calculator';
 
 export type DoorFramePartCostInput = {
@@ -71,16 +72,23 @@ export type DoorFrameVatPricing = {
 
 export type DoorFramePricing = DoorFrameVatPricing & {
   profitRate: string;
+  profitRateSource?:
+    | 'SIZE_OVERRIDE'
+    | 'PRODUCT_OVERRIDE'
+    | 'ROW_EXCEPTION'
+    | 'PRODUCT_PRICING_SETTING'
+    | 'GROUP_PRICING_SETTING'
+    | 'GLOBAL_PRICING_SETTING';
   profitAmount: string;
   priceBeforeRounding: string;
   /** Excel ROUNDUP(priceBeforeRounding, 0) */
   roundedSalePrice: string;
   /** Nakit satış = roundedSalePrice */
   cashSalePrice: string;
-  cardMarkupRate: string;
-  cardPriceBeforeRounding: string;
-  /** ROUNDUP(cashSalePrice * (1 + cardMarkupRate/100), 0) */
-  cardSalePrice: string;
+  cardMarkupRate: string | null;
+  cardPriceBeforeRounding: string | null;
+  /** ROUNDUP(cashSalePrice * (1 + cardMarkupRate/100), 0); oran yoksa null */
+  cardSalePrice: string | null;
 };
 
 export type DoorFrameSizeCostWithVatResult = DoorFrameSizeCostResult & {
@@ -130,7 +138,7 @@ export class DoorFrameCalculator {
     extraCosts: DoorFrameExtraCostsInput,
     vatRate: string,
     profitRate: string,
-    cardMarkupRate: string,
+    cardMarkupRate: string | null,
   ): DoorFrameSizeCostPricedResult[] {
     return this.applySaleChannels(
       this.applyProfit(this.calculateCostsWithVat(sizes, extraCosts, vatRate), profitRate),
@@ -222,25 +230,23 @@ export class DoorFrameCalculator {
         };
       }
     >,
-    cardMarkupRateRaw: string,
+    cardMarkupRateRaw: string | null | undefined,
   ): DoorFrameSizeCostPricedResult[] {
-    const cardMarkupRate = this.parseCardMarkupRate(cardMarkupRateRaw);
-    const hundred = toDecimal(100);
-    const one = toDecimal(1);
-
     return rows.map((row) => {
       const cashSalePrice = toDecimal(row.pricing.roundedSalePrice);
-      const cardPriceBeforeRounding = cashSalePrice.times(
-        one.plus(cardMarkupRate.div(hundred)),
-      );
+      const card = applyPercentCardSale({
+        cashPrice: cashSalePrice.toFixed(),
+        cardMarkupRate: cardMarkupRateRaw,
+        rounding: 'roundUpWholeTl',
+      });
       return {
         ...row,
         pricing: {
           ...row.pricing,
           cashSalePrice: cashSalePrice.toFixed(),
-          cardMarkupRate: cardMarkupRate.toFixed(),
-          cardPriceBeforeRounding: cardPriceBeforeRounding.toFixed(),
-          cardSalePrice: roundUpToWholeTl(cardPriceBeforeRounding).toFixed(),
+          cardMarkupRate: card.cardMarkupRate,
+          cardPriceBeforeRounding: card.cardPriceRaw,
+          cardSalePrice: card.cardSalePrice,
         },
       };
     });
@@ -253,7 +259,7 @@ export class DoorFrameCalculator {
     extraCosts?: DoorFrameExtraCostsInput;
     vatRate?: string;
     profitRate?: string;
-    cardMarkupRate?: string;
+    cardMarkupRate?: string | null;
   }):
     | DoorFrameMdfSizeResult[]
     | DoorFrameSizeCostResult[]
@@ -269,17 +275,12 @@ export class DoorFrameCalculator {
       if (input.profitRate == null || input.profitRate === '') {
         throw new Error('DoorFrameCalculator mode=cost_with_profit için profitRate zorunludur.');
       }
-      if (input.cardMarkupRate == null || input.cardMarkupRate === '') {
-        throw new Error(
-          'DoorFrameCalculator mode=cost_with_profit için cardMarkupRate zorunludur.',
-        );
-      }
       return this.calculateCostsWithProfit(
         input.sizes,
         input.extraCosts,
         input.vatRate,
         input.profitRate,
-        input.cardMarkupRate,
+        input.cardMarkupRate ?? null,
       );
     }
     if (input?.mode === 'cost_with_vat') {
@@ -365,22 +366,6 @@ export class DoorFrameCalculator {
     }
     if (rate.isNegative()) {
       throw new BadRequestException('Kâr oranı (profitRate) negatif olamaz.');
-    }
-    return rate;
-  }
-
-  private parseCardMarkupRate(value: string) {
-    if (value == null || value === '') {
-      throw new BadRequestException('Kredi kartı farkı (cardMarkupRate) eksik.');
-    }
-    let rate;
-    try {
-      rate = toDecimal(value);
-    } catch {
-      throw new BadRequestException(`Kredi kartı farkı (cardMarkupRate) geçersiz: ${value}`);
-    }
-    if (rate.isNegative()) {
-      throw new BadRequestException('Kredi kartı farkı (cardMarkupRate) negatif olamaz.');
     }
     return rate;
   }

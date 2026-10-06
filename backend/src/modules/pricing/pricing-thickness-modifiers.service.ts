@@ -9,17 +9,13 @@ import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UpdateSupurgelikDecorativeRateDto } from './dto/update-supurgelik-decorative-rate.dto';
 import { assertPricingThicknessModifier } from './pricing-thickness-modifier.validation';
-import {
-  SUPURGELIK_MANAGED_DECORATIVE_THICKNESSES,
-  isSupurgelikManagedDecorativeThickness,
-} from './supurgelik-decorative-thicknesses';
 
 const MODIFIER_ENTITY_TYPE = 'PricingThicknessModifier';
 
 export type SupurgelikDecorativeRateItem = {
-  modifierId: string;
-  thicknessMm: (typeof SUPURGELIK_MANAGED_DECORATIVE_THICKNESSES)[number];
-  rate: string;
+  modifierId: string | null;
+  thicknessMm: number;
+  rate: string | null;
   isActive: boolean;
 };
 
@@ -57,7 +53,6 @@ export class PricingThicknessModifiersService {
       where: {
         productGroupId: group.id,
         modifierType: PricingModifierType.DECORATIVE,
-        thicknessMm: { in: [...SUPURGELIK_MANAGED_DECORATIVE_THICKNESSES] },
         isActive: true,
         effectiveFrom: { lte: now },
         OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
@@ -75,17 +70,30 @@ export class PricingThicknessModifiersService {
       byThickness.set(row.thicknessMm, row);
     }
 
-    const items: SupurgelikDecorativeRateItem[] = [];
-    for (const thicknessMm of SUPURGELIK_MANAGED_DECORATIVE_THICKNESSES) {
-      const row = byThickness.get(thicknessMm);
-      if (!row) continue;
-      items.push({
-        modifierId: row.id,
-        thicknessMm,
-        rate: toDecimal(row.rate.toString()).toString(),
-        isActive: row.isActive,
+    const catalogThicknesses = await this.listSupurgelikCatalogThicknesses();
+    const thicknesses = new Set<number>([
+      ...catalogThicknesses,
+      ...byThickness.keys(),
+    ]);
+    const items = [...thicknesses]
+      .sort((left, right) => left - right)
+      .map((thicknessMm) => {
+        const row = byThickness.get(thicknessMm);
+        if (!row) {
+          return {
+            modifierId: null,
+            thicknessMm,
+            rate: null,
+            isActive: false,
+          };
+        }
+        return {
+          modifierId: row.id,
+          thicknessMm,
+          rate: toDecimal(row.rate.toString()).toString(),
+          isActive: row.isActive,
+        };
       });
-    }
 
     return {
       productGroupCode: 'SUPURGELIK',
@@ -95,8 +103,9 @@ export class PricingThicknessModifiersService {
   }
 
   /**
-   * SUPURGELIK 12/14/18 mm dekoratif oranı sürümlemesi.
-   * 8/9/10 mm kayıt oluşturmaz. Same-value no-op. Audit aynı transaction içindedir.
+   * SUPURGELIK grup + kalınlık dekoratif oranı sürümlemesi.
+   * Katalogda görünen eksik kalınlıklar (ör. 8/10 mm) için yeni kayıt açılabilir.
+   * Same-value no-op. Audit aynı transaction içindedir.
    */
   async replaceSupurgelikDecorativeRate(
     dto: UpdateSupurgelikDecorativeRateDto,
@@ -107,9 +116,9 @@ export class PricingThicknessModifiersService {
         'productGroup Süpürgelik için SUPURGELIK olmalıdır.',
       );
     }
-    if (!isSupurgelikManagedDecorativeThickness(dto.thicknessMm)) {
+    if (!Number.isInteger(dto.thicknessMm) || dto.thicknessMm <= 0) {
       throw new BadRequestException(
-        'Dekoratif oran yalnız 12, 14 veya 18 mm için güncellenebilir.',
+        'thicknessMm pozitif tam sayı (mm) olmalıdır.',
       );
     }
 
@@ -119,8 +128,8 @@ export class PricingThicknessModifiersService {
     } catch {
       throw new BadRequestException('Dekoratif oran geçerli bir Decimal olmalıdır.');
     }
-    if (!rate.isFinite() || rate.lte(0)) {
-      throw new BadRequestException('Dekoratif oran 0’dan büyük olmalıdır.');
+    if (!rate.isFinite() || rate.isNegative()) {
+      throw new BadRequestException('Dekoratif oran negatif olamaz.');
     }
 
     await this.prisma.$transaction(async (tx) => {
@@ -209,5 +218,47 @@ export class PricingThicknessModifiersService {
     });
 
     return this.listSupurgelikDecorativeRates(dto.productGroup, now);
+  }
+
+  /**
+   * Süpürgelik listesinde görünen kalınlıklar: generic ProductionYield + ProductSize.
+   * Kapı Kasası / Çıta / Pervaz kalınlıkları sızmaz.
+   */
+  private async listSupurgelikCatalogThicknesses(): Promise<number[]> {
+    const productSizes = await this.prisma.productSize.findMany({
+      select: { widthMm: true, lengthMm: true },
+    });
+    const productSizeKeys = new Set(
+      productSizes.map((size) => `${size.widthMm}|${size.lengthMm}`),
+    );
+    const yields = await this.prisma.productionYield.findMany({
+      where: {
+        productId: null,
+        isActive: true,
+        rawMaterial: { isActive: true },
+      },
+      include: { rawMaterial: true },
+    });
+
+    const thicknesses = new Set<number>();
+    for (const row of yields) {
+      if (
+        row.productId !== null ||
+        !row.isActive ||
+        !row.rawMaterial.isActive ||
+        row.pieceLengthMm !== row.rawMaterial.sheetLengthMm ||
+        !productSizeKeys.has(`${row.pieceWidthMm}|${row.pieceLengthMm}`)
+      ) {
+        continue;
+      }
+      const thicknessMm = Number(row.rawMaterial.thicknessMm.toString());
+      if (!Number.isInteger(thicknessMm) || thicknessMm <= 0) {
+        throw new BadRequestException(
+          `${row.rawMaterial.code} için geçersiz Süpürgelik kalınlığı: ${row.rawMaterial.thicknessMm.toString()}`,
+        );
+      }
+      thicknesses.add(thicknessMm);
+    }
+    return [...thicknesses];
   }
 }

@@ -115,9 +115,20 @@
 }
 
 .cp-issue-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 13px;
   color: #4b5563;
-  padding: 2px 0;
+  padding: 4px 0;
+}
+
+.cp-issue-kind {
+  margin: 8px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7280;
 }
 
 .cp-badge {
@@ -178,5 +189,27 @@
 @media (max-width: 1100px) {
   .cp-top {
     grid-template-columns: 1fr;
+  }
+}
+
+@media screen and (max-width: 767px) {
+  .cp-page {
+    max-width: 100%;
+  }
+
+  .cp-group-item,
+  .cp-event-item,
+  .cp-status-head,
+  .cp-issue-list li,
+  .cp-card-head {
+    flex-wrap: wrap;
+  }
+
+  .cp-actions {
+    flex-direction: column;
+  }
+
+  .cp-action {
+    width: 100%;
   }
 }

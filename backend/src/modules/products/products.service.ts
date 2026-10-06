@@ -5,6 +5,7 @@ export type ProductGroupSummary = {
   id: string;
   code: string;
   name: string;
+  calculatorType: string;
   isActive: boolean;
   activeProductCount: number;
   products: Array<{
@@ -42,6 +43,7 @@ export class ProductsService {
         id: group.id,
         code: group.code,
         name: group.name,
+        calculatorType: group.calculatorType,
         isActive: group.isActive,
         activeProductCount: group.products.length,
         products: group.products,

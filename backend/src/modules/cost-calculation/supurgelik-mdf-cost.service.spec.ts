@@ -1,7 +1,10 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MaterialPriceType, PricingModifierType } from '@prisma/client';
 import { Decimal } from '@prisma/client/runtime/library';
-import type { SupurgelikProductCode } from '../../calculation-engine/calculators/supurgelik-mdf-calculator';
+import {
+  SUPURGELIK_PRODUCT_CODES,
+  type SupurgelikProductCode,
+} from '../../calculation-engine/calculators/supurgelik-mdf-calculator';
 import { toDecimal } from '../../common/decimal/decimal.util';
 import { CostCalculationService } from './cost-calculation.service';
 
@@ -148,9 +151,48 @@ function buildService(
       findMany: jest.fn().mockResolvedValue(rows),
     },
     pricingSetting: {
-      findMany: jest.fn().mockImplementation(() =>
-        Promise.resolve(currentPricingSettings()),
+      findMany: jest.fn().mockImplementation(
+        ({
+          where,
+        }: {
+          where?: {
+            productId?: string | null;
+            productGroupId?: string | null;
+            isActive?: boolean;
+          };
+        }) => {
+          const rows = currentPricingSettings();
+          return Promise.resolve(
+            rows.filter((row) => {
+              if (where?.isActive === true && !row.isActive) return false;
+              if (where && 'productId' in where) {
+                if (where.productId == null && row.productId != null) return false;
+                if (where.productId != null && row.productId !== where.productId) {
+                  return false;
+                }
+              }
+              if (where && 'productGroupId' in where) {
+                if (where.productGroupId == null && row.productGroupId != null) {
+                  return false;
+                }
+                if (
+                  where.productGroupId != null &&
+                  row.productGroupId !== where.productGroupId
+                ) {
+                  return false;
+                }
+              }
+              return true;
+            }),
+          );
+        },
       ),
+    },
+    productPricingOverride: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    productSize: {
+      findUnique: jest.fn().mockResolvedValue(null),
     },
     pricingThicknessModifier: {
       findMany: jest.fn().mockResolvedValue([
@@ -317,7 +359,7 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
       publishedCashPrice: null,
       statusCode: 'PP_WRAPPING_COST_MISSING',
     });
-    expect(prisma.pricingSetting.findMany).toHaveBeenCalledTimes(4);
+    expect(prisma.pricingSetting.findMany).toHaveBeenCalledTimes(16);
     expect(prisma.pricingThicknessModifier.findMany).toHaveBeenCalledTimes(2);
     expect(
       prisma.productionYield.findMany.mock.calls.every(
@@ -422,8 +464,9 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
       publishedCashPrice: null,
     });
     expect(
-      prisma.pricingSetting.findMany.mock.calls.every(
-        ([arg]) => arg.where.productId === null,
+      prisma.pricingSetting.findMany.mock.calls.some(
+        ([arg]: [{ where: { productId?: string | null; productGroupId?: string | null } }]) =>
+          arg.where.productId === null && arg.where.productGroupId === 'group-supurgelik',
       ),
     ).toBe(true);
   });
@@ -644,7 +687,7 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
       profitAmount: '32.038125',
       publishedCashPrice: '185',
     });
-    expect(prisma.pricingSetting.findMany).toHaveBeenCalledTimes(2);
+    expect(prisma.pricingSetting.findMany).toHaveBeenCalledTimes(8);
     expect(extraCostsService.listForProductGroup).toHaveBeenCalledTimes(2);
     expect('updateMany' in prisma.productionYield).toBe(false);
     expect('updateMany' in prisma.product).toBe(false);
@@ -709,5 +752,72 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
       productId: null,
       rawMaterial: { thicknessMm: 9 },
     });
+  });
+
+  it('dört varyant seçili CASH veya CARD tabakasını kullanır; NET ve gider aynı kalır', async () => {
+    const row = master(12, 120, 16, '2500');
+    row.rawMaterial.prices.push({
+      id: 'cash-2000',
+      priceType: MaterialPriceType.CASH,
+      price: new Decimal('2000'),
+      effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+      effectiveTo: null,
+      isActive: true,
+    });
+    const { service } = buildService([row], undefined, undefined, () =>
+      wrappingResponse('10'),
+    );
+
+    for (const productCode of SUPURGELIK_PRODUCT_CODES) {
+      const cash = await service.getSupurgelikMdfCost(
+        {
+          productCode,
+          thicknessMm: 12,
+          widthMm: 120,
+          lengthMm: 2800,
+          materialPriceType: 'CASH',
+        },
+        NOW,
+      );
+      const card = await service.getSupurgelikMdfCost(
+        {
+          productCode,
+          thicknessMm: 12,
+          widthMm: 120,
+          lengthMm: 2800,
+        },
+        NOW,
+      );
+      expect(cash.materialPriceType).toBe('CASH');
+      expect(cash.sheetPrice).toEqual({ priceType: 'CASH', amount: '2000' });
+      expect(cash.mdfUnitCost).toBe(toDecimal('2000').div('16').toFixed());
+      expect(card.sheetPrice).toEqual({
+        priceType: 'CARD_INSTALLMENT',
+        amount: '2500',
+      });
+      expect(card.mdfUnitCost).toBe(toDecimal('2500').div('16').toFixed());
+      expect(cash.productionYield.netQty).toBe(16);
+      expect(card.productionYield.netQty).toBe(16);
+      expect(cash.extraCosts).toEqual(card.extraCosts);
+    }
+  });
+
+  it('eksik CASH kart fiyatına düşmez', async () => {
+    const row = master(12, 120, 16, '2500');
+    const { service } = buildService([row]);
+    await expect(
+      service.getSupurgelikMdfCost(
+        {
+          productCode: 'DUZ_SUPURGELIK',
+          thicknessMm: 12,
+          widthMm: 120,
+          lengthMm: 2800,
+          materialPriceType: 'CASH',
+        },
+        NOW,
+      ),
+    ).rejects.toThrow(
+      'Aktif MDF fiyatı bulunamadı: MDF-12-2100X2800-ZIMPARALI / CASH',
+    );
   });
 });

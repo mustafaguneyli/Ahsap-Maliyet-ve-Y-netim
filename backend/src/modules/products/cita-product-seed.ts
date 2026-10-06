@@ -57,6 +57,7 @@ export async function seedCitaProductMaster(
       data: {
         code: CITA_PRODUCT_GROUP_SEED.code,
         name: CITA_PRODUCT_GROUP_SEED.name,
+        calculatorType: 'CITA',
         isActive: true,
       },
     });

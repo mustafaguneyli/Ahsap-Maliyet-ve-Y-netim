@@ -1,4 +1,5 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { CitaRawMaterialPriceMissingException } from './cita-mdf.errors';
 import { CITA_EXTRA_COST_MISSING } from '../../calculation-engine/calculators/cita-production-calculator';
 import { CITA_PUBLISHED_PRICE_MISSING } from '../pricing/cita-published-price-band-data';
 import { OrderQuoteService } from './order-quote.service';
@@ -68,6 +69,7 @@ describe('OrderQuoteService', () => {
         prisma as never,
         costCalculationService as never,
         citaProductionService as never,
+        { quoteByProductSize: jest.fn() } as never,
       ),
       citaProductionService,
       costCalculationService,
@@ -140,6 +142,127 @@ describe('OrderQuoteService', () => {
     expect(result.totalCashPrice).toBe('5800');
     expect(result.totalCardPrice).toBe('6960');
     expect(result.sizeLabel).toBe('14 mm · 3,5×280 cm');
+  });
+
+  it('Çıta siparişi materialPriceType değerini mevcut calculator çağrısına ekler', async () => {
+    const { service, citaProductionService } = buildService({
+      citaRow: {
+        productionCost: '53.55319148936170212765957447',
+        statusCode: null,
+        missingExtraCosts: [],
+        materialPriceType: 'CASH',
+        pricing: {
+          publishedCashPrice: '145',
+          publishedCardPrice: '174',
+          statusCode: null,
+        },
+      },
+    });
+
+    const result = await service.quote({
+      productId: 'cita-id',
+      quantity: 40,
+      thicknessMm: '14',
+      widthMm: '40',
+      lengthMm: '2800',
+      materialPriceType: 'CASH',
+    });
+
+    expect(citaProductionService.getQuotedProductionCost).toHaveBeenCalledWith({
+      thicknessMm: '14',
+      widthMm: '40',
+      lengthMm: '2800',
+      materialPriceType: 'CASH',
+    });
+    expect(result.unitCashPrice).toBe('145');
+    expect(result.totalCashPrice).toBe('5800');
+    expect(result.unitProductionCost).toBe('53.55319148936170212765957447');
+  });
+
+  it('Çıta siparişinde eksik peşin fiyat kart alışına düşmez', async () => {
+    const { service } = buildService({
+      citaError: new CitaRawMaterialPriceMissingException(
+        'MDF-14-2100X2800-ZIMPARALI',
+        'CASH',
+      ),
+    });
+
+    const result = await service.quote({
+      productId: 'cita-id',
+      quantity: 1,
+      thicknessMm: '14',
+      widthMm: '40',
+      lengthMm: '2800',
+      materialPriceType: 'CASH',
+    });
+
+    expect(result.productionCostAvailable).toBe(false);
+    expect(result.unitProductionCost).toBeNull();
+    expect(result.missingMessages.join(' ')).toMatch(/peşin alış fiyatı/);
+    expect(result.missingMessages.join(' ')).not.toMatch(/CARD_INSTALLMENT/);
+  });
+
+  it('Kapı Kasası siparişi seçili alış türündeki birim maliyeti adetle çarpar', async () => {
+    const { service, costCalculationService, citaProductionService } = buildService({
+      product: doorProduct,
+      doorRows: [
+        {
+          widthCm: 10,
+          lengthCm: 210,
+          productionCost: '655.12',
+          pricing: {
+            publishedCashPrice: '900',
+            publishedCardPrice: '1080',
+          },
+        },
+      ],
+    });
+
+    const result = await service.quote({
+      productId: 'door-id',
+      quantity: 1,
+      widthMm: '100',
+      lengthMm: '2100',
+      materialPriceType: 'CASH',
+    });
+
+    expect(costCalculationService.getDoorFrameMdfCosts).toHaveBeenCalledWith(
+      '34_MM',
+      expect.any(Date),
+      'CASH',
+    );
+    expect(citaProductionService.getQuotedProductionCost).not.toHaveBeenCalled();
+    expect(result.unitProductionCost).toBe('655.12');
+    expect(result.totalProductionCost).toBe('655.12');
+  });
+
+  it('kart oranı yokken nakit toplamı kalır, kart toplamı null olur', async () => {
+    const { service } = buildService({
+      citaRow: {
+        productionCost: '50.50',
+        statusCode: null,
+        missingExtraCosts: [],
+        pricing: {
+          publishedCashPrice: '145',
+          publishedCardPrice: null,
+          statusCode: null,
+        },
+      },
+    });
+
+    const result = await service.quote({
+      productId: 'cita-id',
+      quantity: 40,
+      thicknessMm: '14',
+      widthMm: '25',
+      lengthMm: '2800',
+    });
+
+    expect(result.unitCashPrice).toBe('145');
+    expect(result.totalCashPrice).toBe('5800');
+    expect(result.unitCardPrice).toBeNull();
+    expect(result.totalCardPrice).toBeNull();
+    expect(result.salePriceAvailable).toBe(true);
   });
 
   it('satış fiyatı yoksa üretim maliyeti yine hesaplanır', async () => {
@@ -263,8 +386,124 @@ describe('OrderQuoteService', () => {
     expect(result.totalCardPrice).toBe('5700');
   });
 
+  it('Pervaz siparişi CASH alış türünü liste hesabına iletir', async () => {
+    const { service, costCalculationService } = buildService({
+      product: {
+        id: 'pervaz-id',
+        code: 'AYARLI_PERVAZ',
+        name: 'Ayarlı Pervaz',
+        productGroup: { code: 'PERVAZ', name: 'Pervaz' },
+      },
+      pervazRows: [
+        {
+          thicknessMm: 12,
+          widthMm: 90,
+          lengthMm: 2200,
+          productionCost: '30',
+          pricing: {
+            publishedSalePrice: '40',
+            cardSaleAvailable: true,
+            cardSalePrice: '48',
+          },
+        },
+      ],
+    });
+
+    const result = await service.quote({
+      productId: 'pervaz-id',
+      quantity: 2,
+      thicknessMm: '12',
+      widthMm: '90',
+      lengthMm: '2200',
+      materialPriceType: 'CASH',
+    });
+
+    expect(costCalculationService.getAyarliPervazMdfCosts).toHaveBeenCalledWith(
+      expect.any(Date),
+      'CASH',
+    );
+    expect(result.unitProductionCost).toBe('30');
+    expect(result.totalProductionCost).toBe('60');
+  });
+
   it('Süpürgelik seçilen ölçü × adet', async () => {
     const { service } = buildService({
+      product: {
+        id: 'sup-id',
+        code: 'DUZ_SUPURGELIK',
+        name: 'Düz Süpürgelik',
+        productGroup: { code: 'SUPURGELIK', name: 'Süpürgelik' },
+      },
+      supurgelikRows: [
+        {
+          thicknessMm: 8,
+          widthMm: 80,
+          lengthMm: 2800,
+          productionCost: '22.50',
+          errorCode: null,
+          pricing: {
+            publishedCashPrice: '35',
+            publishedCardPrice: null,
+            cardStatusMessage: 'Kart/taksit oranı tanımlı değil',
+          },
+        },
+      ],
+    });
+
+    const result = await service.quote({
+      productId: 'sup-id',
+      quantity: 100,
+      thicknessMm: '8',
+      widthMm: '80',
+      lengthMm: '2800',
+    });
+
+    expect(result.totalProductionCost).toBe('2250');
+    expect(result.totalCashPrice).toBe('3500');
+    expect(result.unitCardPrice).toBeNull();
+    expect(result.cardPriceMessage).toBe('Kart/taksit oranı tanımlı değil');
+  });
+
+  it('Süpürgelik kart satışını backend fiyatından gösterir', async () => {
+    const { service } = buildService({
+      product: {
+        id: 'sup-id',
+        code: 'DUZ_SUPURGELIK',
+        name: 'Düz Süpürgelik',
+        productGroup: { code: 'SUPURGELIK', name: 'Süpürgelik' },
+      },
+      supurgelikRows: [
+        {
+          thicknessMm: 8,
+          widthMm: 80,
+          lengthMm: 2800,
+          productionCost: '22.50',
+          errorCode: null,
+          pricing: {
+            publishedCashPrice: '35',
+            publishedCardPrice: '42',
+            cardStatusMessage: null,
+          },
+        },
+      ],
+    });
+
+    const result = await service.quote({
+      productId: 'sup-id',
+      quantity: 100,
+      thicknessMm: '8',
+      widthMm: '80',
+      lengthMm: '2800',
+    });
+
+    expect(result.unitCashPrice).toBe('35');
+    expect(result.unitCardPrice).toBe('42');
+    expect(result.totalCardPrice).toBe('4200');
+    expect(result.cardPriceMessage).toBeNull();
+  });
+
+  it('Süpürgelik siparişi CASH alış türünü liste hesabına iletir', async () => {
+    const { service, costCalculationService } = buildService({
       product: {
         id: 'sup-id',
         code: 'DUZ_SUPURGELIK',
@@ -285,14 +524,63 @@ describe('OrderQuoteService', () => {
 
     const result = await service.quote({
       productId: 'sup-id',
-      quantity: 100,
+      quantity: 4,
       thicknessMm: '8',
       widthMm: '80',
       lengthMm: '2800',
+      materialPriceType: 'CASH',
     });
 
-    expect(result.totalProductionCost).toBe('2250');
-    expect(result.totalCashPrice).toBe('3500');
+    expect(costCalculationService.getSupurgelikMdfCosts).toHaveBeenCalledWith({
+      productCode: 'DUZ_SUPURGELIK',
+      materialPriceType: 'CASH',
+    });
+    expect(result.totalProductionCost).toBe('90');
+  });
+
+  it('eksik nakit alış fiyatı kart fiyatına düşmez ve türünü söyler', async () => {
+    const { service } = buildService({
+      product: {
+        id: 'sup-id',
+        code: 'DUZ_SUPURGELIK',
+        name: 'Düz Süpürgelik',
+        productGroup: { code: 'SUPURGELIK', name: 'Süpürgelik' },
+      },
+      supurgelikRows: [
+        {
+          thicknessMm: 9,
+          widthMm: 80,
+          lengthMm: 2800,
+          productionCost: null,
+          errorCode: 'RAW_MATERIAL_PRICE_MISSING',
+          pricing: { publishedCashPrice: null },
+        },
+      ],
+    });
+
+    const cash = await service.quote({
+      productId: 'sup-id',
+      quantity: 5,
+      thicknessMm: '9',
+      widthMm: '80',
+      lengthMm: '2800',
+      materialPriceType: 'CASH',
+    });
+    const card = await service.quote({
+      productId: 'sup-id',
+      quantity: 5,
+      thicknessMm: '9',
+      widthMm: '80',
+      lengthMm: '2800',
+      materialPriceType: 'CARD_INSTALLMENT',
+    });
+
+    expect(cash.productionCostAvailable).toBe(false);
+    expect(cash.unitProductionCost).toBeNull();
+    expect(cash.missingMessages).toEqual(['Nakit alış fiyatı tanımlı değil.']);
+    expect(card.missingMessages).toEqual([
+      'Kart/taksitli alış fiyatı tanımlı değil.',
+    ]);
   });
 
   it('geçersiz ölçü BadRequest üretir', async () => {

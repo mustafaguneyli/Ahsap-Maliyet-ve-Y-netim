@@ -90,18 +90,19 @@ describe('CITA production ExtraCost DB (tutar seed yok, rollback)', () => {
     await prisma.$disconnect();
   });
 
-  it('başlangıçta ExtraCostValue yoksa EXTRA_COST_MISSING; test tutarları rollback edilir', async () => {
-    expect(await citaExtraCostValueCount(prisma)).toBe(0);
-
+  it('CUTTING 250→500 birim kesimi 1→2 yapar; ExtraCostValue rollback edilir', async () => {
+    const extraCountBefore = await citaExtraCostValueCount(prisma);
     const missing = await service.getProductionCost(CUSTOM);
-    expect(missing.statusCode).toBe(CITA_EXTRA_COST_MISSING);
-    expect(missing.productionCost).toBeNull();
-    expect(missing.missingExtraCosts).toEqual(['CUTTING', 'LABOR']);
     expect(missing.mdfUnitCost).toBeTruthy();
     expect(missing.productionYield).toEqual({
       netQty: 53,
       source: 'CALCULATED_CUT_RULE',
     });
+    if (extraCountBefore === 0) {
+      expect(missing.statusCode).toBe(CITA_EXTRA_COST_MISSING);
+      expect(missing.productionCost).toBeNull();
+      expect(missing.missingExtraCosts).toEqual(['CUTTING', 'LABOR']);
+    }
 
     const countsBefore = {
       productSize: await prisma.productSize.count(),
@@ -123,7 +124,7 @@ describe('CITA production ExtraCost DB (tutar seed yok, rollback)', () => {
 
         await extras.updateValue('CUTTING', {
           productGroup: 'CITA',
-          amount: '5',
+          amount: '250',
           effectiveFrom: asOf,
         });
         await extras.updateValue('LABOR', {
@@ -137,9 +138,11 @@ describe('CITA production ExtraCost DB (tutar seed yok, rollback)', () => {
           netQty: 53,
           source: 'CALCULATED_CUT_RULE',
         });
-        expect(customBefore.extraCostsTotal).toBe('15');
+        expect(customBefore.cuttingBatchCost).toBe('250');
+        expect(customBefore.cuttingUnitCost).toBe('1');
+        expect(customBefore.extraCostsTotal).toBe('11');
         expect(customBefore.productionCost).toBe(
-          toDecimal(customBefore.mdfUnitCost).plus(15).toFixed(),
+          toDecimal(customBefore.mdfUnitCost).plus(11).toFixed(),
         );
         expect(customBefore.statusCode).toBeNull();
 
@@ -148,7 +151,8 @@ describe('CITA production ExtraCost DB (tutar seed yok, rollback)', () => {
           netQty: 47,
           source: 'MASTER',
         });
-        expect(masterBefore.extraCostsTotal).toBe('15');
+        expect(masterBefore.cuttingUnitCost).toBe(customBefore.cuttingUnitCost);
+        expect(masterBefore.extraCostsTotal).toBe('11');
         expect(masterBefore.sheetPrice.amount).toBe(customBefore.sheetPrice.amount);
 
         const yieldSnapshot = await tx.productionYield.findMany({
@@ -171,7 +175,7 @@ describe('CITA production ExtraCost DB (tutar seed yok, rollback)', () => {
 
         await extras.updateValue('CUTTING', {
           productGroup: 'CITA',
-          amount: '6',
+          amount: '500',
           effectiveFrom: asOf,
         });
 
@@ -182,10 +186,17 @@ describe('CITA production ExtraCost DB (tutar seed yok, rollback)', () => {
         expect(customAfter.cut.effectiveCutPitchMm).toBe(
           customBefore.cut.effectiveCutPitchMm,
         );
-        expect(customAfter.extraCostsTotal).toBe('16');
+        expect(customAfter.cuttingBatchCost).toBe('500');
+        expect(customAfter.cuttingUnitCost).toBe('2');
+        expect(customAfter.extraCostsTotal).toBe('12');
         expect(customAfter.productionCost).toBe(
           toDecimal(customBefore.productionCost!).plus(1).toFixed(),
         );
+
+        const masterAfter = await production.getProductionCost(MASTER);
+        expect(masterAfter.cuttingUnitCost).toBe('2');
+        expect(masterAfter.extraCostsTotal).toBe('12');
+        expect(masterAfter.mdfUnitCost).toBe(masterBefore.mdfUnitCost);
 
         expect(
           await tx.productionYield.findMany({
@@ -215,7 +226,7 @@ describe('CITA production ExtraCost DB (tutar seed yok, rollback)', () => {
       if (error !== ROLLBACK) throw error;
     }
 
-    expect(await citaExtraCostValueCount(prisma)).toBe(0);
+    expect(await citaExtraCostValueCount(prisma)).toBe(extraCountBefore);
     expect(await prisma.productSize.count()).toBe(countsBefore.productSize);
     expect(await prisma.productionYield.count()).toBe(countsBefore.productionYield);
     expect(await prisma.recipe.count()).toBe(countsBefore.recipe);

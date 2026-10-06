@@ -74,6 +74,7 @@ export async function seedSupurgelikProductMaster(
   if (!group) {
     group = await prisma.productGroup.create({
       data: {
+        calculatorType: 'SUPURGELIK',
         code: SUPURGELIK_PRODUCT_GROUP_SEED.code,
         name: SUPURGELIK_PRODUCT_GROUP_SEED.name,
         isActive: true,

@@ -36,7 +36,7 @@ describe('seedSupurgelikProductMaster', () => {
       sizesSkippedExisting: 0,
     });
     expect(prisma.productGroup.create).toHaveBeenCalledWith({
-      data: { code: 'SUPURGELIK', name: 'Süpürgelik', isActive: true },
+      data: { code: 'SUPURGELIK', name: 'Süpürgelik', calculatorType: 'SUPURGELIK', isActive: true },
     });
     expect(prisma.product.create.mock.calls.map(([arg]) => arg.data)).toEqual(
       SUPURGELIK_PRODUCT_SEEDS.map(({ code, name }) => ({

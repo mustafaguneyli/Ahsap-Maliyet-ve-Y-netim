@@ -2,9 +2,8 @@ import { Transform } from 'class-transformer';
 import { IsIn, IsNotEmpty, IsOptional, Matches } from 'class-validator';
 
 /**
- * Pervaz product-level PricingSetting.
- * profitRate zorunlu. cardFixedSurchargeAmount opsiyonel; yoksa mevcut değer korunur.
- * cardMarkupRate yazılmaz.
+ * Pervaz product-level profitRate + group-scope cardMarkupRate.
+ * cardFixedSurchargeAmount opsiyonel legacy alandır; kart satışı yüzde ile üretilir.
  */
 export class UpdateAyarliPervazPricingSettingDto {
   @IsNotEmpty({ message: 'productGroup zorunludur.' })
@@ -20,6 +19,15 @@ export class UpdateAyarliPervazPricingSettingDto {
     typeof value === 'string' ? value.trim().replace(',', '.') : value,
   )
   profitRate!: string;
+
+  @IsOptional()
+  @Matches(/^\d+(\.\d{1,4})?$/, {
+    message: 'Kart / taksit farkı geçerli bir Decimal olmalıdır (örn. 20 veya 18.5).',
+  })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().replace(',', '.') : value,
+  )
+  cardMarkupRate?: string;
 
   @IsOptional()
   @Matches(/^\d+(\.\d{1,4})?$/, {

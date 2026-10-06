@@ -152,7 +152,11 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
       profitRate: { toString(): string } | null;
       cardFixedSurchargeAmount?: { toString(): string } | null;
     }>;
-    groupSettings?: Array<{ isActive: boolean; profitRate: { toString(): string } | null }>;
+    groupSettings?: Array<{
+      isActive: boolean;
+      profitRate?: { toString(): string } | null;
+      cardMarkupRate?: { toString(): string } | null;
+    }>;
     globalSettings?: Array<{ isActive: boolean; profitRate: { toString(): string } | null }>;
   }) {
     const prisma = {
@@ -213,6 +217,12 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
       pricingRowException: {
         findMany: jest.fn().mockResolvedValue(opts.rowExceptions ?? []),
       },
+      productPricingOverride: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      productSize: {
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
       pricingSetting: {
         findMany: jest.fn().mockImplementation(
           ({
@@ -224,7 +234,14 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
               return Promise.resolve(opts.productSettings ?? [defaultProductSetting]);
             }
             if (where.productGroupId != null) {
-              return Promise.resolve(opts.groupSettings ?? []);
+              return Promise.resolve(
+                opts.groupSettings ?? [
+                  {
+                    isActive: true,
+                    cardMarkupRate: { toString: () => '20' },
+                  },
+                ],
+              );
             }
             return Promise.resolve(opts.globalSettings ?? []);
           },
@@ -297,6 +314,58 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     expect(result.pricing).not.toHaveProperty('finalSalePrice');
     expect(result.pricing.cardSaleAvailable).toBe(false);
     expect(result.pricing.cardSalePrice).toBeNull();
+  });
+
+  it('CASH seçilince ana parça ve kılçık peşin fiyatı kullanır; NET ve masraf aynı kalır', async () => {
+    const { service } = buildService({
+      mainYields: [
+        { rawMaterial: main9, netQty: 40, pieceWidthMm: 70, pieceLengthMm: 2200 },
+      ],
+      kilcikMasterNetQty: 66,
+    });
+
+    const cash = await service.getAyarliPervazMdfCost(
+      { productCode: 'AYARLI_PERVAZ', thicknessMm: 9, widthMm: 70, lengthMm: 2200 },
+      now,
+      'CASH',
+    );
+    const card = await service.getAyarliPervazMdfCost(
+      { productCode: 'AYARLI_PERVAZ', thicknessMm: 9, widthMm: 70, lengthMm: 2200 },
+      now,
+    );
+
+    expect(cash.materialPriceType).toBe('CASH');
+    expect(cash.mainPiece.sheetPriceType).toBe('CASH');
+    expect(cash.kilcik.sheetPriceType).toBe('CASH');
+    expect(cash.mainPiece.sheetPrice).toBe('1600');
+    expect(cash.kilcik.sheetPrice).toBe('900');
+    expect(cash.mainPiece.netQty).toBe(card.mainPiece.netQty);
+    expect(cash.kilcik.netQty).toBe(66);
+    expect(cash.extraCosts).toEqual(card.extraCosts);
+    expect(cash.mainPiece.sheetPrice).not.toBe(card.mainPiece.sheetPrice);
+    expect(cash.pricing.profitRate).toBe(card.pricing.profitRate);
+    expect(cash.pricing.cardSalePrice).toBeNull();
+  });
+
+  it('eksik CASH kart fiyatına düşmez', async () => {
+    const cashless = {
+      ...main9,
+      prices: main9.prices.filter((item) => item.priceType !== MaterialPriceType.CASH),
+    };
+    const { service } = buildService({
+      mainYields: [
+        { rawMaterial: cashless, netQty: 40, pieceWidthMm: 70, pieceLengthMm: 2200 },
+      ],
+      kilcikMasterNetQty: 66,
+    });
+
+    await expect(
+      service.getAyarliPervazMdfCost(
+        { productCode: 'AYARLI_PERVAZ', thicknessMm: 9, widthMm: 70, lengthMm: 2200 },
+        now,
+        'CASH',
+      ),
+    ).rejects.toThrow('MDF-9-2200X2800-ZIMPARALI için şu an geçerli CASH alış fiyatı bulunamadı.');
   });
 
   it('12 mm 10×250 ProductionYield master: 2100 tabaka ve NET 22', async () => {
@@ -623,10 +692,9 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     expect(result.pricing.adjustmentSource).toBe('ROW_EXCEPTION');
     expect(result.pricing.publishedSalePrice).toBe('179');
     expect(result.pricing.cardSaleAvailable).toBe(true);
-    expect(result.pricing.cardPricingType).toBe('FIXED_SURCHARGE');
-    expect(result.pricing.cardFixedSurchargeAmount).toBe('2');
-    expect(result.pricing.cardSalePrice).toBe('181');
-    expect(result.pricing.cardSalePrice).not.toBe('180');
+    expect(result.pricing.cardPricingType).toBe('PERCENT_MARKUP');
+    expect(result.pricing.cardMarkupRate).toBe('20');
+    expect(result.pricing.cardSalePrice).toBe('214.8');
     expect(
       toDecimal(result.pricing.publishedSalePrice).equals(
         toDecimal(result.pricing.roundedSalePrice).plus('1'),
@@ -878,11 +946,13 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     );
     expect(result.pricing.publishedSalePrice).toBe('87');
     expect(result.pricing.cardSaleAvailable).toBe(true);
-    expect(result.pricing.cardSalePrice).toBe('89');
-    expect(result.pricing).not.toHaveProperty('cardMarkupRate');
+    expect(result.pricing.cardSalePrice).toBe(
+      toDecimal('87').times('1.2').toFixed(),
+    );
+    expect(result.pricing.cardMarkupRate).toBe('20');
   });
 
-  it('cardFixed 2→3 yalnız kartı değiştirir; nakit aynı kalır', async () => {
+  it('kart oranı 20→25 yalnız kartı değiştirir; nakit aynı kalır', async () => {
     const yields = {
       mainYields: [
         { rawMaterial: main18, netQty: 28, pieceWidthMm: 100, pieceLengthMm: 2200 },
@@ -901,12 +971,8 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     };
     const two = await buildService({
       ...yields,
-      productSettings: [
-        {
-          isActive: true,
-          profitRate: { toString: () => '15' },
-          cardFixedSurchargeAmount: { toString: () => '2' },
-        },
+      groupSettings: [
+        { isActive: true, cardMarkupRate: { toString: () => '20' } },
       ],
     }).service.getAyarliPervazMdfCost(
       { productCode: 'AYARLI_PERVAZ', thicknessMm: 18, widthMm: 100, lengthMm: 2200 },
@@ -914,12 +980,8 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     );
     const three = await buildService({
       ...yields,
-      productSettings: [
-        {
-          isActive: true,
-          profitRate: { toString: () => '15' },
-          cardFixedSurchargeAmount: { toString: () => '3' },
-        },
+      groupSettings: [
+        { isActive: true, cardMarkupRate: { toString: () => '25' } },
       ],
     }).service.getAyarliPervazMdfCost(
       { productCode: 'AYARLI_PERVAZ', thicknessMm: 18, widthMm: 100, lengthMm: 2200 },
@@ -927,7 +989,7 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     );
     expect(two.pricing.publishedSalePrice).toBe('179');
     expect(three.pricing.publishedSalePrice).toBe('179');
-    expect(two.pricing.cardSalePrice).toBe('181');
-    expect(three.pricing.cardSalePrice).toBe('182');
+    expect(two.pricing.cardSalePrice).toBe('214.8');
+    expect(three.pricing.cardSalePrice).toBe('223.75');
   });
 });

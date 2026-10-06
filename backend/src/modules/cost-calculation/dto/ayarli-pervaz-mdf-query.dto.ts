@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsIn, IsInt, IsNotEmpty, Min } from 'class-validator';
+import { MaterialPriceTypeQueryDto } from './material-price-type-query.dto';
 
 function toPositiveInt(value: unknown): unknown {
   if (value === undefined || value === null || value === '') {
@@ -12,7 +13,7 @@ function toPositiveInt(value: unknown): unknown {
  * GET /cost-calculation/pervaz/mdf
  * Internal ölçüler mm.
  */
-export class AyarliPervazMdfQueryDto {
+export class AyarliPervazMdfQueryDto extends MaterialPriceTypeQueryDto {
   @IsNotEmpty({ message: 'productCode zorunludur.' })
   @IsIn(['AYARLI_PERVAZ'], {
     message: 'Bu aşamada productCode yalnız AYARLI_PERVAZ olabilir.',

@@ -6,6 +6,7 @@ import {
   updateExtraCostValue,
 } from '../api/extra-costs-api';
 import { ApiError } from '../lib/api';
+import { extraCostTypeLabel } from '../lib/display-labels';
 import { formatDateTr, formatTry } from '../lib/money';
 import './extra-costs-page.css';
 
@@ -148,7 +149,7 @@ export function ExtraCostsPage() {
             <thead>
               <tr>
                 <th>Kalem</th>
-                <th>Kod</th>
+                <th>Tür</th>
                 <th>Aktif değer</th>
                 <th>Geçerlilik</th>
                 <th />
@@ -158,7 +159,7 @@ export function ExtraCostsPage() {
               {data.items.map((item) => (
                 <tr key={item.typeId}>
                   <td className="ec-name">{item.typeName}</td>
-                  <td>{item.typeCode}</td>
+                  <td>{extraCostTypeLabel(item.typeCode)}</td>
                   <td className="ec-price">{formatTry(item.amount)}</td>
                   <td>{formatDateTr(item.effectiveFrom)}</td>
                   <td>

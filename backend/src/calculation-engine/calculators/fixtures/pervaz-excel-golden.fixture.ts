@@ -20,6 +20,7 @@ export const PERVAZ_EXCEL_GOLDEN_INPUTS = {
   kilcikRawMaterialCode: 'MDF-4-2200X2800-ZIMPARALI',
   kilcikSheetPrice: '1050',
   defaultProfitRate: '15',
+  cardMarkupRate: '20',
   cardFixedSurchargeAmount: '2',
 } as const;
 

@@ -1,4 +1,5 @@
 import { apiRequest } from '../lib/api';
+import type { MaterialPriceType } from '../lib/material-price-type';
 
 export type OrderQuoteRequest = {
   productId: string;
@@ -6,6 +7,7 @@ export type OrderQuoteRequest = {
   thicknessMm?: string;
   widthMm: string;
   lengthMm: string;
+  materialPriceType?: MaterialPriceType;
 };
 
 export type OrderQuoteResult = {
@@ -23,6 +25,7 @@ export type OrderQuoteResult = {
   totalCashPrice: string | null;
   unitCardPrice: string | null;
   totalCardPrice: string | null;
+  cardPriceMessage: string | null;
 };
 
 export function quoteOrderCost(

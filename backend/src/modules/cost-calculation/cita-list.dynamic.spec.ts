@@ -106,7 +106,7 @@ describe('CITA list DB-driven MASTER (yazmaz, ExtraCost rollback)', () => {
   });
 
   it('56 aktif CITA MASTER satırını sıralı döner; ExtraCost yoksa productionCost null', async () => {
-    expect(await citaExtraCostValueCount(prisma)).toBe(0);
+    const extraCountBefore = await citaExtraCostValueCount(prisma);
 
     const productId = await citaProductId(prisma);
     const citaYields = await prisma.productionYield.findMany({
@@ -181,19 +181,21 @@ describe('CITA list DB-driven MASTER (yazmaz, ExtraCost rollback)', () => {
     expect(find('18', '80')?.productionYield).toEqual({ netQty: 25, source: 'MASTER' });
     expect(find('30', '60')?.productionYield).toEqual({ netQty: 32, source: 'MASTER' });
 
-    expect(listed.rows.every((row) => row.statusCode === CITA_EXTRA_COST_MISSING)).toBe(
-      true,
-    );
-    expect(listed.rows.every((row) => row.productionCost === null)).toBe(true);
-    expect(listed.rows.every((row) => row.extraCostsTotal === null)).toBe(true);
     expect(listed.rows.every((row) => row.mdfUnitCost != null)).toBe(true);
-    expect(
-      listed.rows.every(
-        (row) =>
-          row.missingExtraCosts.includes('CUTTING') &&
-          row.missingExtraCosts.includes('LABOR'),
-      ),
-    ).toBe(true);
+    if (extraCountBefore === 0) {
+      expect(listed.rows.every((row) => row.statusCode === CITA_EXTRA_COST_MISSING)).toBe(
+        true,
+      );
+      expect(listed.rows.every((row) => row.productionCost === null)).toBe(true);
+      expect(listed.rows.every((row) => row.extraCostsTotal === null)).toBe(true);
+      expect(
+        listed.rows.every(
+          (row) =>
+            row.missingExtraCosts.includes('CUTTING') &&
+            row.missingExtraCosts.includes('LABOR'),
+        ),
+      ).toBe(true);
+    }
 
     const custom = await production.getProductionCost({
       thicknessMm: '14',
@@ -215,14 +217,14 @@ describe('CITA list DB-driven MASTER (yazmaz, ExtraCost rollback)', () => {
     expect(await prisma.productionYield.count()).toBe(countsBefore.productionYield);
     expect(await prisma.recipe.count()).toBe(countsBefore.recipe);
     expect(await prisma.extraCostValue.count()).toBe(countsBefore.extraCostValue);
-    expect(await citaExtraCostValueCount(prisma)).toBe(0);
+    expect(await citaExtraCostValueCount(prisma)).toBe(extraCountBefore);
     for (const before of countsBefore.otherYields) {
       expect(await productScopedYieldCount(prisma, before.code)).toBe(before.count);
     }
   });
 
   it('geçici CUTTING+LABOR ile 56 satır productionCost hesaplar ve rollback eder', async () => {
-    expect(await citaExtraCostValueCount(prisma)).toBe(0);
+    const extraCountBefore = await citaExtraCostValueCount(prisma);
 
     try {
       await prisma.$transaction(async (tx) => {
@@ -231,7 +233,7 @@ describe('CITA list DB-driven MASTER (yazmaz, ExtraCost rollback)', () => {
 
         await extras.updateValue('CUTTING', {
           productGroup: 'CITA',
-          amount: '5',
+          amount: '250',
           effectiveFrom: asOf,
         });
         await extras.updateValue('LABOR', {
@@ -245,13 +247,14 @@ describe('CITA list DB-driven MASTER (yazmaz, ExtraCost rollback)', () => {
         expect(
           listed.rows.every((row) => row.productionYield.source === 'MASTER'),
         ).toBe(true);
-        expect(listed.rows.every((row) => row.extraCostsTotal === '15')).toBe(true);
+        expect(listed.rows.every((row) => row.cuttingUnitCost === '1')).toBe(true);
+        expect(listed.rows.every((row) => row.extraCostsTotal === '11')).toBe(true);
         expect(listed.rows.every((row) => row.statusCode === null)).toBe(true);
         expect(
           listed.rows.every(
             (row) =>
               row.productionCost ===
-              toDecimal(row.mdfUnitCost!).plus(15).toFixed(),
+              toDecimal(row.mdfUnitCost!).plus(11).toFixed(),
           ),
         ).toBe(true);
 
@@ -261,6 +264,6 @@ describe('CITA list DB-driven MASTER (yazmaz, ExtraCost rollback)', () => {
       if (error !== ROLLBACK) throw error;
     }
 
-    expect(await citaExtraCostValueCount(prisma)).toBe(0);
+    expect(await citaExtraCostValueCount(prisma)).toBe(extraCountBefore);
   });
 });

@@ -1,9 +1,9 @@
 import { decimalToString, toDecimal } from '../../common/decimal/decimal.util';
 import { CITA_EXTRA_COST_TYPE_ORDER } from '../../modules/extra-costs/cita-extra-cost';
 import {
-  attachCitaClassifiedPricing,
-  attachCitaListPricing,
-  resolveCitaClassifiedPricing,
+  attachCitaClassifiedPricing as attachCitaClassifiedPricingRaw,
+  attachCitaListPricing as attachCitaListPricingRaw,
+  resolveCitaClassifiedPricing as resolveCitaClassifiedPricingRaw,
 } from '../../modules/cost-calculation/cita-list-pricing';
 import {
   CITA_PUBLISHED_PRICE_BAND_SEEDS,
@@ -47,6 +47,31 @@ import {
  * doğrulanmış matris ve sözleşmeyi tek yerde kilitler.
  */
 const bands = citaPublishedPriceBandViewsFromSeeds();
+const RATE = '20';
+
+function attachCitaListPricing<T extends { thicknessMm: string; widthMm: string }>(
+  row: T,
+  priceBands: Parameters<typeof attachCitaListPricingRaw>[1],
+  rate: Parameters<typeof attachCitaListPricingRaw>[2] = RATE,
+) {
+  return attachCitaListPricingRaw(row, priceBands, rate);
+}
+
+function attachCitaClassifiedPricing<T extends { thicknessMm: string; widthMm: string }>(
+  row: T,
+  priceBands: Parameters<typeof attachCitaClassifiedPricingRaw>[1],
+  rate: Parameters<typeof attachCitaClassifiedPricingRaw>[2] = RATE,
+) {
+  return attachCitaClassifiedPricingRaw(row, priceBands, rate);
+}
+
+function resolveCitaClassifiedPricing(
+  priceBands: Parameters<typeof resolveCitaClassifiedPricingRaw>[0],
+  query: Parameters<typeof resolveCitaClassifiedPricingRaw>[1],
+  rate: Parameters<typeof resolveCitaClassifiedPricingRaw>[2] = RATE,
+) {
+  return resolveCitaClassifiedPricingRaw(priceBands, query, rate);
+}
 const STANDARD_WIDTHS_MM = [10, 20, 30, 40, 50, 60, 70, 80] as const;
 const PRICED_THICKNESSES_MM = [12, 14, 16] as const;
 
@@ -252,6 +277,8 @@ describe('CITA golden regression', () => {
       ],
     });
     expect(missing.mdfUnitCost).toBe(mdf.mdfUnitCost);
+    expect(missing.cuttingBatchCost).toBeNull();
+    expect(missing.cuttingUnitCost).toBeNull();
     expect(missing.extraCostsTotal).toBeNull();
     expect(missing.productionCost).toBeNull();
     expect(missing.statusCode).toBe(CITA_EXTRA_COST_MISSING);
@@ -262,13 +289,40 @@ describe('CITA golden regression', () => {
     const withExtras = calculateCitaProductionCost({
       mdf,
       extraCosts: [
-        { code: 'CUTTING', amount: '5' },
+        { code: 'CUTTING', amount: '250' },
         { code: 'LABOR', amount: '10' },
       ],
     });
-    expect(withExtras.extraCostsTotal).toBe('15');
+    expect(withExtras.extraCosts).toEqual([
+      { code: 'CUTTING', amount: '250' },
+      { code: 'LABOR', amount: '10' },
+    ]);
+    expect(withExtras.cuttingBatchCost).toBe('250');
+    expect(withExtras.cuttingUnitCost).toBe('1');
+    expect(withExtras.extraCostsTotal).toBe('11');
     expect(withExtras.productionCost).toBe(
-      toDecimal(mdf.mdfUnitCost).plus(15).toFixed(),
+      toDecimal(mdf.mdfUnitCost).plus(11).toFixed(),
+    );
+
+    const standard = calculateCitaProductionCost({
+      mdf: calculateCitaMdfCost(
+        mdfInput({
+          thicknessMm: '14',
+          widthMm: '40',
+          netQty: 47,
+          source: 'MASTER',
+          sheetPrice: '2625',
+        }),
+      ),
+      extraCosts: [
+        { code: 'CUTTING', amount: '250' },
+        { code: 'LABOR', amount: '10' },
+      ],
+    });
+    expect(standard.cuttingUnitCost).toBe(withExtras.cuttingUnitCost);
+    expect(standard.extraCostsTotal).toBe('11');
+    expect(standard.productionCost).toBe(
+      toDecimal(standard.mdfUnitCost).plus(11).toFixed(),
     );
   });
 
@@ -319,9 +373,9 @@ describe('CITA golden regression', () => {
       }),
     ).toMatchObject({
       publishedCashPrice: '150',
-      publishedCardPrice: '181',
+      publishedCardPrice: '180',
     });
-    expect(toDecimal('150').times('1.20').toString()).not.toBe('181');
+    expect(toDecimal('150').times('1.20').toString()).toBe('180');
   });
 
   it('56 standart list satırında 26 fiyat / 30 missing ve tam matris kilitlidir', () => {
@@ -386,11 +440,14 @@ describe('CITA golden regression', () => {
   it('custom classification golden, sınır ve missing sözleşmesini kilitler', () => {
     const customGoldens = [
       { thicknessMm: 12, widthMm: '15', cash: '115', card: '138', band: '1–2 cm' },
-      { thicknessMm: 14, widthMm: '25', cash: '145', card: '174', band: '3–4 cm' },
+      { thicknessMm: 14, widthMm: '25', cash: '115', card: '138', band: '1–2 cm' },
       { thicknessMm: 14, widthMm: '35', cash: '145', card: '174', band: '3–4 cm' },
       { thicknessMm: 16, widthMm: '47', cash: '185', card: '222', band: '5–6 cm' },
-      { thicknessMm: 12, widthMm: '63', cash: '215', card: '258', band: '7–8 cm' },
+      { thicknessMm: 12, widthMm: '63', cash: '185', card: '222', band: '5–6 cm' },
+      { thicknessMm: 12, widthMm: '70', cash: '215', card: '258', band: '7–8 cm' },
+      { thicknessMm: 14, widthMm: '85', cash: '215', card: '258', band: '7–8 cm' },
       { thicknessMm: 18, widthMm: '47', cash: '185', card: '222', band: '5–6 cm' },
+      { thicknessMm: 18, widthMm: '66', cash: '185', card: '222', band: '5–6 cm' },
     ] as const;
     for (const row of customGoldens) {
       const priced = attachCitaClassifiedPricing(
@@ -407,13 +464,13 @@ describe('CITA golden regression', () => {
     }
 
     const boundaries = [
-      ['20', '115', '1–2 cm'],
-      ['20.1', '145', '3–4 cm'],
-      ['40', '145', '3–4 cm'],
-      ['40.1', '185', '5–6 cm'],
-      ['60', '185', '5–6 cm'],
-      ['60.1', '215', '7–8 cm'],
-      ['80', '215', '7–8 cm'],
+      ['26', '115', '1–2 cm'],
+      ['26.1', '145', '3–4 cm'],
+      ['46', '145', '3–4 cm'],
+      ['46.1', '185', '5–6 cm'],
+      ['66', '185', '5–6 cm'],
+      ['66.1', '215', '7–8 cm'],
+      ['86', '215', '7–8 cm'],
     ] as const;
     for (const [widthMm, cash, band] of boundaries) {
       expect(
@@ -424,7 +481,7 @@ describe('CITA golden regression', () => {
       });
     }
     expect(
-      resolveCitaClassifiedPricing(bands, { widthMm: '80.1', thicknessMm: 12 }),
+      resolveCitaClassifiedPricing(bands, { widthMm: '86.1', thicknessMm: 12 }),
     ).toMatchObject({
       pricingAvailable: false,
       statusCode: CITA_PUBLISHED_PRICE_MISSING,
@@ -432,11 +489,14 @@ describe('CITA golden regression', () => {
 
     for (const query of [
       { widthMm: '35', thicknessMm: 18 },
+      { widthMm: '46', thicknessMm: 18 },
+      { widthMm: '66.1', thicknessMm: 18 },
       { widthMm: '70', thicknessMm: 18 },
       { widthMm: '35', thicknessMm: 10 },
-      { widthMm: '55', thicknessMm: 22 },
-      { widthMm: '75', thicknessMm: 30 },
-      { widthMm: '85', thicknessMm: 14 },
+      { widthMm: '25', thicknessMm: 10 },
+      { widthMm: '45', thicknessMm: 22 },
+      { widthMm: '70', thicknessMm: 30 },
+      { widthMm: '87', thicknessMm: 14 },
     ]) {
       expect(resolveCitaClassifiedPricing(bands, query)).toMatchObject({
         pricingAvailable: false,

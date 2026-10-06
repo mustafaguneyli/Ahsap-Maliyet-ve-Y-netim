@@ -1,8 +1,7 @@
 import { Transform, Type } from 'class-transformer';
-import { IsIn, IsInt, IsNotEmpty, Matches } from 'class-validator';
-import { SUPURGELIK_MANAGED_DECORATIVE_THICKNESSES } from '../supurgelik-decorative-thicknesses';
+import { IsIn, IsInt, IsNotEmpty, Matches, Min } from 'class-validator';
 
-/** SUPURGELIK grup + kalınlık dekoratif oranı. 8/9/10 mm oluşturmaz. */
+/** SUPURGELIK grup + kalınlık dekoratif oranı. Katalogda görünen eksik kalınlıklar da yazılabilir. */
 export class UpdateSupurgelikDecorativeRateDto {
   @IsNotEmpty({ message: 'productGroup zorunludur.' })
   @IsIn(['SUPURGELIK'], {
@@ -13,10 +12,8 @@ export class UpdateSupurgelikDecorativeRateDto {
 
   @Type(() => Number)
   @IsInt({ message: 'thicknessMm tam sayı olmalıdır.' })
-  @IsIn([...SUPURGELIK_MANAGED_DECORATIVE_THICKNESSES], {
-    message: 'Dekoratif oran yalnız 12, 14 veya 18 mm için güncellenebilir.',
-  })
-  thicknessMm!: (typeof SUPURGELIK_MANAGED_DECORATIVE_THICKNESSES)[number];
+  @Min(1, { message: 'thicknessMm pozitif tam sayı (mm) olmalıdır.' })
+  thicknessMm!: number;
 
   @IsNotEmpty({ message: 'Dekoratif oran zorunludur.' })
   @Matches(/^\d+(\.\d{1,4})?$/, {

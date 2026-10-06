@@ -23,6 +23,34 @@ button {
   cursor: pointer;
 }
 
+@media screen {
+  html,
+  body,
+  #root {
+    max-width: 100%;
+  }
+
+  html {
+    overflow-x: clip;
+  }
+
+  body.nav-lock {
+    overflow: hidden;
+  }
+}
+
+@media screen and (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  button {
+    min-height: 40px;
+  }
+}
+
 a {
   color: inherit;
 }

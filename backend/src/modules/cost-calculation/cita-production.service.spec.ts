@@ -23,6 +23,7 @@ function mdfResult(): CitaMdfResult {
       effectiveCutPitchMm: '39',
     },
     productionYield: { netQty: 53, source: 'CALCULATED_CUT_RULE' },
+    materialPriceType: 'CARD_INSTALLMENT',
     sheetPrice: { priceType: 'CARD_INSTALLMENT', amount: '2625' },
     mdfUnitCost: toDecimal('2625').div('53').toFixed(),
   };
@@ -70,7 +71,7 @@ describe('CitaProductionService', () => {
       getMdfCost: jest.fn().mockResolvedValue(mdf),
     };
     const extraCostsService = {
-      listForProductGroup: jest.fn().mockResolvedValue(extraList('5', '10')),
+      listForProductGroup: jest.fn().mockResolvedValue(extraList('250', '10')),
     };
     const service = new CitaProductionService(
       citaMdfService as never,
@@ -82,7 +83,9 @@ describe('CitaProductionService', () => {
     expect(citaMdfService.getMdfCost).toHaveBeenCalledWith(query, now);
     expect(extraCostsService.listForProductGroup).toHaveBeenCalledWith('CITA', now);
     expect(result.productionYield.netQty).toBe(53);
-    expect(result.productionCost).toBe(toDecimal(mdf.mdfUnitCost).plus(15).toFixed());
+    expect(result.cuttingUnitCost).toBe('1');
+    expect(result.extraCostsTotal).toBe('11');
+    expect(result.productionCost).toBe(toDecimal(mdf.mdfUnitCost).plus(11).toFixed());
     expect(result.statusCode).toBeNull();
   });
 
@@ -119,6 +122,16 @@ describe('CitaProductionService', () => {
             isActive: true,
             effectiveTo: null,
             thicknesses: [{ thicknessMm: 12 }, { thicknessMm: 14 }, { thicknessMm: 16 }],
+          },
+        ]),
+      },
+      pricingSetting: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            isActive: true,
+            productGroupId: 'g-cita',
+            productId: null,
+            cardMarkupRate: { toString: () => '20' },
           },
         ]),
       },

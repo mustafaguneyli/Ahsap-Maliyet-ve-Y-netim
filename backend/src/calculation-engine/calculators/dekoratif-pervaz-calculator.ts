@@ -8,7 +8,7 @@ import {
   type AyarliPervazMdfPartResult,
 } from './ayarli-pervaz-mdf-calculator';
 import {
-  applyPervazFixedCardSale,
+  applyPervazPercentCardSale,
   type PervazCardSaleBreakdown,
 } from './pervaz-card-sale';
 
@@ -26,8 +26,8 @@ export type DekoratifPervazInput = {
   extraCosts: AyarliPervazExtraCostsInput;
   profitRate: string;
   decorativePremiumRate: string;
-  /** Product-level sabit TL. NULL ise kart yayınlanmaz (Geniş Kılçık). */
-  cardFixedSurchargeAmount?: string | null;
+  /** Group-scope yüzde kart farkı. Geniş Kılçık kart yayınlamaz. */
+  cardMarkupRate?: string | null;
 };
 
 export type DekoratifPervazResult = {
@@ -76,14 +76,10 @@ export class DekoratifPervazCalculator {
       .div(100);
     const priceBeforeRounding = baseSalePrice.plus(decorativePremiumAmount);
     const publishedSalePrice = roundUpToWholeTl(priceBeforeRounding);
-    const cardFixedSurchargeAmount =
-      input.cardFixedSurchargeAmount == null || input.cardFixedSurchargeAmount === ''
-        ? null
-        : input.cardFixedSurchargeAmount;
-    const card = applyPervazFixedCardSale({
+    const card = applyPervazPercentCardSale({
       publishedCashPrice: publishedSalePrice.toFixed(),
-      cardFixedSurchargeAmount,
-      cardSaleAvailable: cardFixedSurchargeAmount != null,
+      cardMarkupRate: input.cardMarkupRate,
+      cardSaleAvailable: input.productCode !== 'DEKORATIF_PERVAZ_GENIS_KILCIK',
     });
 
     return {

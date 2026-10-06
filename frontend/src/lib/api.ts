@@ -53,14 +53,21 @@ export async function apiRequest<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
-  const response = await fetch(`${apiUrl}${path}`, {
-    ...options,
-    cache: 'no-store',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options?.headers ?? {}),
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiUrl}${path}`, {
+      ...options,
+      cache: 'no-store',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options?.headers ?? {}),
+      },
+    });
+  } catch {
+    throw new Error(
+      'Sunucuya bağlanılamadı. Formdaki veriler duruyor; bağlantı gelince tekrar deneyin.',
+    );
+  }
 
   if (response.status === 204) {
     return undefined as T;

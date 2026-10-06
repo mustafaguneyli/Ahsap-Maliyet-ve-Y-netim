@@ -6,7 +6,14 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
 
   const frontendOrigin = process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173';
-  app.enableCors({ origin: frontendOrigin });
+  const allowedOrigins = [
+    frontendOrigin,
+    frontendOrigin.replace('://localhost', '://127.0.0.1'),
+    frontendOrigin.replace('://127.0.0.1', '://localhost'),
+  ];
+  app.enableCors({
+    origin: [...new Set(allowedOrigins)],
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({

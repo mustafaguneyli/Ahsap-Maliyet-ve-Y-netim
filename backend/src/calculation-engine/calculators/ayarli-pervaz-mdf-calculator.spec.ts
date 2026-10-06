@@ -143,7 +143,7 @@ describe('AyarliPervazMdfCalculator', () => {
     expect(toDecimal('1050').div(50).toFixed()).toBe('21');
   });
 
-  it('CASH fiyat tipi reddeder', () => {
+  it('ana parça ve kılçık farklı alış türünü reddeder', () => {
     expect(() =>
       calculator.calculate({
         productCode: 'AYARLI_PERVAZ',
@@ -152,7 +152,7 @@ describe('AyarliPervazMdfCalculator', () => {
         lengthMm: 2200,
         mainPiece: {
           rawMaterialCode: 'MDF-9-2200X2800-ZIMPARALI',
-          sheetPriceType: 'CASH' as 'CARD_INSTALLMENT',
+          sheetPriceType: 'CASH',
           sheetPrice: '1600',
           netQty: 40,
           yieldSource: 'EXCEL_MASTER',
@@ -167,7 +167,7 @@ describe('AyarliPervazMdfCalculator', () => {
         extraCosts: excelExtraCosts,
         profitRate: '15',
       }),
-    ).toThrow('CARD_INSTALLMENT');
+    ).toThrow('aynı MDF alış türünü');
   });
 
   it('extraCosts.total Decimal CUTTING+GLUE+LABOR; productionCost = MDF + total; OTHER yok', () => {
@@ -660,7 +660,6 @@ describe('Ayarlı Pervaz Excel MDF karşılaştırması (20 satır)', () => {
     expect(result.pricing).not.toHaveProperty('vatAmount');
     expect(result.pricing).not.toHaveProperty('costWithVat');
     expect(result.pricing).not.toHaveProperty('finalSalePrice');
-    expect(result.pricing).not.toHaveProperty('cardMarkupRate');
   });
 
   it('ortak roundUpToWholeTl: near-whole artığı 101 yapmaz; 100.0001 → 101', () => {
@@ -721,7 +720,7 @@ describe('Ayarlı Pervaz Excel MDF karşılaştırması (20 satır)', () => {
   }
 
   it.each(AYARLI_PERVAZ_EXCEL_MDF_ROWS)(
-    '$thicknessMm mm $widthMm×$lengthMm kart kapsamı Excel nakit+2 veya null',
+    '$thicknessMm mm $widthMm×$lengthMm kart kapsamı yüzde markup veya null',
     (row) => {
       const result = calculator.calculate({
         productCode: 'AYARLI_PERVAZ',
@@ -745,16 +744,16 @@ describe('Ayarlı Pervaz Excel MDF karşılaştırması (20 satır)', () => {
         extraCosts: excelExtraCosts,
         profitRate: excelProfitRate(row),
         adjustmentAmount: excelAdjustmentAmount(row),
-        cardFixedSurchargeAmount: '2',
+        cardMarkupRate: '20',
         cardSaleEnabled: isAyarliCardListed(row),
       });
 
       expect(result.pricing.publishedSalePrice).toBe(row.excelFinalSalePrice);
       if (isAyarliCardListed(row)) {
         expect(result.pricing.cardSaleAvailable).toBe(true);
-        expect(result.pricing.cardPricingType).toBe('FIXED_SURCHARGE');
+        expect(result.pricing.cardPricingType).toBe('PERCENT_MARKUP');
         expect(result.pricing.cardSalePrice).toBe(
-          toDecimal(result.pricing.publishedSalePrice).plus('2').toFixed(),
+          toDecimal(result.pricing.publishedSalePrice).times('1.2').toFixed(),
         );
       } else {
         expect(result.pricing.cardSaleAvailable).toBe(false);
@@ -769,7 +768,7 @@ describe('Ayarlı Pervaz Excel MDF karşılaştırması (20 satır)', () => {
     expect(AYARLI_PERVAZ_CARD_SALE_UNLISTED_MEASURES).toHaveLength(8);
   });
 
-  it('18 mm 10×220: nakit 179, kart 181; +1 karta dahildir; 178+2 yapılmaz', () => {
+  it('18 mm 10×220: nakit 179, kart 214.8; +1 karta dahildir', () => {
     const row = AYARLI_PERVAZ_EXCEL_MDF_ROWS.find(
       (item) => item.thicknessMm === 18 && item.widthMm === 100 && item.lengthMm === 2200,
     )!;
@@ -795,19 +794,15 @@ describe('Ayarlı Pervaz Excel MDF karşılaştırması (20 satır)', () => {
       extraCosts: excelExtraCosts,
       profitRate: '15',
       adjustmentAmount: '1',
-      cardFixedSurchargeAmount: '2',
+      cardMarkupRate: '20',
       cardSaleEnabled: true,
     });
     expect(result.pricing.roundedSalePrice).toBe('178');
     expect(result.pricing.publishedSalePrice).toBe('179');
-    expect(result.pricing.cardSalePrice).toBe('181');
-    expect(result.pricing.cardSalePrice).not.toBe('180');
-    expect(result.pricing.cardSalePrice).toBe(
-      toDecimal(result.pricing.publishedSalePrice).plus('2').toFixed(),
-    );
+    expect(result.pricing.cardSalePrice).toBe('214.8');
   });
 
-  it('cardFixed 2→3 yalnız kartı +1 değiştirir; nakit aynı kalır', () => {
+  it('kart oranı 20→25 yalnız kartı değiştirir; nakit aynı kalır', () => {
     const row = AYARLI_PERVAZ_EXCEL_MDF_ROWS.find(
       (item) => item.thicknessMm === 18 && item.widthMm === 100 && item.lengthMm === 2200,
     )!;
@@ -835,19 +830,17 @@ describe('Ayarlı Pervaz Excel MDF karşılaştırması (20 satır)', () => {
       adjustmentAmount: '1',
       cardSaleEnabled: true,
     };
-    const two = calculator.calculate({ ...input, cardFixedSurchargeAmount: '2' });
-    const three = calculator.calculate({ ...input, cardFixedSurchargeAmount: '3' });
-    expect(two.pricing.publishedSalePrice).toBe('179');
-    expect(three.pricing.publishedSalePrice).toBe(two.pricing.publishedSalePrice);
-    expect(two.pricing.cardSalePrice).toBe('181');
-    expect(three.pricing.cardSalePrice).toBe('182');
+    const twenty = calculator.calculate({ ...input, cardMarkupRate: '20' });
+    const twentyFive = calculator.calculate({ ...input, cardMarkupRate: '25' });
+    expect(twenty.pricing.publishedSalePrice).toBe('179');
+    expect(twentyFive.pricing.publishedSalePrice).toBe(twenty.pricing.publishedSalePrice);
+    expect(twenty.pricing.cardSalePrice).toBe('214.8');
+    expect(twentyFive.pricing.cardSalePrice).toBe('223.75');
   });
 
-  it('Pervaz calculator cardMarkupRate kullanmaz', () => {
-    const src = readFileSync(join(__dirname, 'ayarli-pervaz-mdf-calculator.ts'), 'utf8');
+  it('Pervaz kart helper ROUNDUP uygulamaz', () => {
     const helper = readFileSync(join(__dirname, 'pervaz-card-sale.ts'), 'utf8');
-    expect(src).not.toMatch(/cardMarkupRate/);
-    expect(helper).not.toMatch(/cardMarkupRate/);
+    expect(helper).toMatch(/cardMarkupRate/);
     expect(helper).not.toMatch(/roundUpToWholeTl/);
   });
 });

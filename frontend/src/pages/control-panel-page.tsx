@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  CitaCostListResponse,
   fetchAyarliPervazMdfCosts,
   fetchCitaCostList,
   fetchDekoratifGenisKilcikCosts,
@@ -8,7 +7,6 @@ import {
   fetchDoorFrameMdfCosts,
   fetchSupurgelikCosts,
   SUPURGELIK_PRODUCT_CODES,
-  SupurgelikCostsResponse,
   SupurgelikProductCode,
 } from '../api/cost-calculation-api';
 import {
@@ -23,12 +21,14 @@ import {
   type ProductGroupSummary,
 } from '../api/product-groups-api';
 import { ApiError } from '../lib/api';
+import type { AppNavigation, CostSettingsGroup } from '../lib/app-navigation';
+import { extraCostTypeLabel } from '../lib/display-labels';
+import { friendlyMaterialPriceError, type MaterialPriceType } from '../lib/material-price-type';
+import { formatSheetSizeCm } from '../lib/length';
 import './control-panel-page.css';
 
 export function ControlPanelPage(props: {
-  onNavigate: (
-    page: 'materials' | 'yields' | 'cost-calculation' | 'audit',
-  ) => void;
+  onNavigate: (target: AppNavigation) => void;
 }) {
   const [groups, setGroups] = useState<ProductGroupSummary[]>([]);
   const [statuses, setStatuses] = useState<GroupSourceStatus[]>([]);
@@ -113,11 +113,35 @@ export function ControlPanelPage(props: {
                     </span>
                   </div>
                   {status.issues.length > 0 ? (
-                    <ul className="cp-issue-list">
-                      {status.issues.map((issue) => (
-                        <li key={issue.text}>{issue.text}</li>
-                      ))}
-                    </ul>
+                    <div className="cp-issue-groups">
+                      {(['cost', 'sale'] as const).map((kind) => {
+                        const items = status.issues.filter((issue) => issue.kind === kind);
+                        if (items.length === 0) return null;
+                        return (
+                          <div key={kind}>
+                            <p className="cp-issue-kind">
+                              {kind === 'cost' ? 'Maliyet' : 'Satış'}
+                            </p>
+                            <ul className="cp-issue-list">
+                              {items.map((issue) => (
+                                <li key={issue.text}>
+                                  <span>{issue.text}</span>
+                                  {issue.action ? (
+                                    <button
+                                      type="button"
+                                      className="cp-link-btn"
+                                      onClick={() => props.onNavigate(issue.action!.target)}
+                                    >
+                                      {issue.action.label}
+                                    </button>
+                                  ) : null}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <p className="cp-muted">Hesabı engelleyen eksik kaynak yok.</p>
                   )}
@@ -134,7 +158,7 @@ export function ControlPanelPage(props: {
           <button
             type="button"
             className="cp-link-btn"
-            onClick={() => props.onNavigate('audit')}
+            onClick={() => props.onNavigate({ page: 'audit' })}
           >
             Tüm Değişiklikleri Gör
           </button>
@@ -161,21 +185,28 @@ export function ControlPanelPage(props: {
           <button
             type="button"
             className="cp-action"
-            onClick={() => props.onNavigate('cost-calculation')}
+            onClick={() => props.onNavigate({ page: 'cost-calculation' })}
           >
             Maliyet Hesapla
           </button>
           <button
             type="button"
             className="cp-action"
-            onClick={() => props.onNavigate('materials')}
+            onClick={() => props.onNavigate({ page: 'price-list' })}
+          >
+            Fiyat Listesi Oluştur
+          </button>
+          <button
+            type="button"
+            className="cp-action"
+            onClick={() => props.onNavigate({ page: 'materials' })}
           >
             Ham Madde Fiyatlarını Güncelle
           </button>
           <button
             type="button"
             className="cp-action"
-            onClick={() => props.onNavigate('yields')}
+            onClick={() => props.onNavigate({ page: 'yields' })}
           >
             NET Üretim Adetlerini Gör
           </button>
@@ -186,10 +217,16 @@ export function ControlPanelPage(props: {
 }
 
 type SourceLevel = 'ok' | 'missing' | 'attention';
+type IssueKind = 'cost' | 'sale';
 
 type SourceIssue = {
   text: string;
   level: SourceLevel;
+  kind: IssueKind;
+  action?: {
+    label: string;
+    target: AppNavigation;
+  };
 };
 
 type GroupSourceStatus = {
@@ -206,15 +243,18 @@ const EXTRA_COST_GROUPS: ExtraCostProductGroup[] = [
   'CITA',
 ];
 
-const IGNORED_STATUS_CODES = new Set(['CITA_PUBLISHED_PRICE_MISSING']);
+const PRICE_TYPES: MaterialPriceType[] = ['CASH', 'CARD_INSTALLMENT'];
 
 const EXTRA_COST_FALLBACK_NAMES: Record<string, string> = {
-  CUTTING: 'Kesim',
-  GLUE: 'Tutkal',
-  LABOR: 'İşçilik',
-  OTHER: 'Diğer',
-  PP_WRAPPING: 'PP Sarma',
+  CUTTING: extraCostTypeLabel('CUTTING'),
+  GLUE: extraCostTypeLabel('GLUE'),
+  LABOR: extraCostTypeLabel('LABOR'),
+  OTHER: extraCostTypeLabel('OTHER'),
+  PP_WRAPPING: extraCostTypeLabel('PP_WRAPPING'),
 };
+
+const PP_MISSING_TEXT = 'PP sarma maliyeti tanımlı değil.';
+const CARD_RATE_MISSING_TEXT = 'Kart/taksit satış oranı tanımlı değil.';
 
 function extraCostLabel(
   code: string,
@@ -255,6 +295,15 @@ function isExtraCostGroup(code: string): code is ExtraCostProductGroup {
   return EXTRA_COST_GROUPS.includes(code as ExtraCostProductGroup);
 }
 
+function isCostSettingsGroup(code: string): code is CostSettingsGroup {
+  return (
+    code === 'door_frame' ||
+    code === 'PERVAZ' ||
+    code === 'SUPURGELIK' ||
+    code === 'CITA'
+  );
+}
+
 function isDoorFrameVariant(code: string): code is '34_MM' | '30_MM' {
   return code === '34_MM' || code === '30_MM';
 }
@@ -270,67 +319,155 @@ function settledValue<T>(result: PromiseSettledResult<T>): T | null {
 function settledError(result: PromiseSettledResult<unknown>): string | null {
   if (result.status !== 'rejected') return null;
   const reason = result.reason;
-  if (reason instanceof ApiError) return reason.message;
-  if (reason instanceof Error) return reason.message;
-  return 'Kaynak durumu alınamadı.';
+  const message =
+    reason instanceof ApiError
+      ? reason.message
+      : reason instanceof Error
+        ? reason.message
+        : 'Kaynak durumu alınamadı.';
+  return friendlyMaterialPriceError(message);
 }
 
-function collectCitaIssues(
-  list: CitaCostListResponse,
-  extras: ExtraCostListResponse | null,
+function settingsAction(group: CostSettingsGroup): SourceIssue['action'] {
+  return {
+    label: 'Maliyet Ayarları',
+    target: {
+      page: 'cost-calculation',
+      costGroup: group,
+      openCostSettings: true,
+    },
+  };
+}
+
+function purchasePriceText(
+  thickness: string | number,
+  sheetWidthMm: number,
+  sheetLengthMm: number,
+  priceType: MaterialPriceType,
+): string {
+  const kind = priceType === 'CASH' ? 'nakit alış fiyatı' : 'kart/taksitli alış fiyatı';
+  return `${formatThickness(thickness)} mm ${formatSheetSizeCm(sheetWidthMm, sheetLengthMm)} MDF ${kind} tanımlı değil.`;
+}
+
+type ListedRow = {
+  statusCode?: string | null;
+  errorCode?: string | null;
+  missingExtraCosts?: string[];
+  thicknessMm?: string | number;
+  rawMaterial?: {
+    code: string;
+    thicknessMm: string | number;
+    sheetWidthMm: number;
+    sheetLengthMm: number;
+  };
+  pricing?: {
+    statusCode?: string | null;
+    cardMarkupRate?: string | null;
+    publishedCashPrice?: string | null;
+    publishedCardPrice?: string | null;
+    publishedSalePrice?: string | null;
+    cardSalePrice?: string | null;
+  } | null;
+};
+
+function listedRows(value: unknown): ListedRow[] {
+  if (!value || typeof value !== 'object' || !('rows' in value)) return [];
+  const rows = (value as { rows?: unknown }).rows;
+  return Array.isArray(rows) ? (rows as ListedRow[]) : [];
+}
+
+function envelopeCardRate(value: unknown): string | null | undefined {
+  if (!value || typeof value !== 'object' || !('cardMarkupRate' in value)) {
+    return undefined;
+  }
+  return (value as { cardMarkupRate: string | null }).cardMarkupRate;
+}
+
+function collectCalculatedIssues(
+  value: unknown,
+  priceType: MaterialPriceType,
+  group: CostSettingsGroup,
 ): SourceIssue[] {
   const issues: SourceIssue[] = [];
-  const extraMissing = new Set<string>();
-  const priceMissing = new Set<string>();
+  let cardRateMissing = envelopeCardRate(value) === null;
 
-  for (const row of list.rows) {
-    if (row.statusCode === 'RAW_MATERIAL_PRICE_MISSING') {
-      priceMissing.add(
-        `${formatThickness(row.rawMaterial.thicknessMm)} mm MDF fiyatı tanımlı değil`,
-      );
+  for (const row of listedRows(value)) {
+    const status = row.errorCode ?? row.statusCode ?? row.pricing?.statusCode ?? null;
+    if (status === 'CITA_PUBLISHED_PRICE_MISSING') continue;
+
+    if (status === 'RAW_MATERIAL_PRICE_MISSING' && row.rawMaterial) {
+      issues.push({
+        text: purchasePriceText(
+          row.rawMaterial.thicknessMm,
+          row.rawMaterial.sheetWidthMm,
+          row.rawMaterial.sheetLengthMm,
+          priceType,
+        ),
+        level: 'missing',
+        kind: 'cost',
+        action: {
+          label: 'Ham Maddeler',
+          target: {
+            page: 'materials',
+            materialSearch: row.rawMaterial.code,
+          },
+        },
+      });
     }
-    if (row.statusCode === 'EXTRA_COST_MISSING') {
-      for (const code of row.missingExtraCosts) {
-        extraMissing.add(`${extraCostLabel(code, extras)} tanımlı değil`);
+
+    if (status === 'DECORATIVE_RATE_MISSING') {
+      const thickness = row.thicknessMm ?? row.rawMaterial?.thicknessMm;
+      if (thickness != null) {
+        issues.push({
+          text: `${formatThickness(thickness)} mm dekoratif maliyet oranı tanımlı değil.`,
+          level: 'missing',
+          kind: 'sale',
+          action: settingsAction('SUPURGELIK'),
+        });
       }
     }
+
+    if (status === 'PP_WRAPPING_COST_MISSING') {
+      issues.push({
+        text: PP_MISSING_TEXT,
+        level: 'missing',
+        kind: 'cost',
+        action: settingsAction('SUPURGELIK'),
+      });
+    }
+
+    if (status === 'EXTRA_COST_MISSING') {
+      for (const code of row.missingExtraCosts ?? []) {
+        issues.push({
+          text: `${extraCostLabel(code, null)} tanımlı değil.`,
+          level: 'missing',
+          kind: 'cost',
+          action: settingsAction(group),
+        });
+      }
+    }
+
+    const cash =
+      row.pricing?.publishedCashPrice ?? row.pricing?.publishedSalePrice ?? null;
+    const card = row.pricing?.publishedCardPrice ?? row.pricing?.cardSalePrice ?? null;
+    if (cash != null && card == null && row.pricing?.cardMarkupRate == null) {
+      cardRateMissing = true;
+    }
   }
 
-  for (const text of extraMissing) issues.push({ text, level: 'missing' });
-  for (const text of priceMissing) issues.push({ text, level: 'missing' });
+  if (cardRateMissing) {
+    issues.push({
+      text: CARD_RATE_MISSING_TEXT,
+      level: 'missing',
+      kind: 'sale',
+      action: {
+        label: 'Fiyatlandırma Ayarları',
+        target: { page: 'pricing' },
+      },
+    });
+  }
+
   return issues;
-}
-
-function collectSupurgelikIssues(list: SupurgelikCostsResponse): SourceIssue[] {
-  const unique = new Set<string>();
-  for (const row of list.rows) {
-    const code = row.errorCode ?? row.pricing.statusCode ?? null;
-    if (!code || IGNORED_STATUS_CODES.has(code)) continue;
-    if (code === 'RAW_MATERIAL_PRICE_MISSING') {
-      unique.add(
-        `${formatThickness(row.rawMaterial.thicknessMm)} mm MDF fiyatı tanımlı değil`,
-      );
-      continue;
-    }
-    if (code === 'DECORATIVE_RATE_MISSING') {
-      unique.add('Dekoratif fark tanımlı değil');
-      continue;
-    }
-    if (code === 'PP_WRAPPING_COST_MISSING') {
-      unique.add('PP Sarma tanımlı değil');
-    }
-  }
-  return [...unique].map((text) => ({ text, level: 'missing' as const }));
-}
-
-function extrasIssues(extras: ExtraCostListResponse | null): SourceIssue[] {
-  if (!extras) return [];
-  return extras.items
-    .filter((item) => item.amount == null)
-    .map((item) => ({
-      text: `${item.typeName} tanımlı değil`,
-      level: 'missing' as const,
-    }));
 }
 
 async function loadGroupStatus(
@@ -338,6 +475,7 @@ async function loadGroupStatus(
 ): Promise<GroupSourceStatus> {
   const issues: SourceIssue[] = [];
   let level: SourceLevel = 'ok';
+  const settingsGroup = isCostSettingsGroup(group.code) ? group.code : null;
 
   const extraResult = isExtraCostGroup(group.code)
     ? await Promise.allSettled([listExtraCosts(group.code)])
@@ -345,40 +483,58 @@ async function loadGroupStatus(
   const extras = extraResult ? settledValue(extraResult[0]) : null;
   const extraError = extraResult ? settledError(extraResult[0]) : null;
   if (extraError) {
-    issues.push({ text: extraError, level: 'attention' });
+    issues.push({ text: extraError, level: 'attention', kind: 'cost' });
     level = 'attention';
-  } else {
-    issues.push(...extrasIssues(extras));
+  } else if (extras && settingsGroup) {
+    for (const item of extras.items) {
+      if (item.amount != null) continue;
+      issues.push({
+        text:
+          item.typeCode === 'PP_WRAPPING'
+            ? PP_MISSING_TEXT
+            : `${item.typeName} tanımlı değil.`,
+        level: 'missing',
+        kind: 'cost',
+        action: settingsAction(settingsGroup),
+      });
+    }
   }
 
   const costJobs: Array<Promise<unknown>> = [];
-  const citaIndex = { value: -1 };
-  const supurgelikIndexes: number[] = [];
+  const jobTypes: MaterialPriceType[] = [];
+  const pushJob = (job: Promise<unknown>, priceType: MaterialPriceType) => {
+    costJobs.push(job);
+    jobTypes.push(priceType);
+  };
 
   if (group.code === 'door_frame') {
     for (const product of group.products) {
-      if (isDoorFrameVariant(product.code)) {
-        costJobs.push(fetchDoorFrameMdfCosts(product.code));
+      if (!isDoorFrameVariant(product.code)) continue;
+      for (const priceType of PRICE_TYPES) {
+        pushJob(fetchDoorFrameMdfCosts(product.code, priceType), priceType);
       }
     }
   } else if (group.code === 'CITA') {
-    citaIndex.value = costJobs.length;
-    costJobs.push(fetchCitaCostList());
+    for (const priceType of PRICE_TYPES) {
+      pushJob(fetchCitaCostList(priceType), priceType);
+    }
   } else if (group.code === 'SUPURGELIK') {
     for (const product of group.products) {
-      if (isSupurgelikProductCode(product.code)) {
-        supurgelikIndexes.push(costJobs.length);
-        costJobs.push(fetchSupurgelikCosts(product.code));
+      if (!isSupurgelikProductCode(product.code)) continue;
+      for (const priceType of PRICE_TYPES) {
+        pushJob(fetchSupurgelikCosts(product.code, priceType), priceType);
       }
     }
   } else if (group.code === 'PERVAZ') {
     for (const product of group.products) {
-      if (product.code === 'AYARLI_PERVAZ') {
-        costJobs.push(fetchAyarliPervazMdfCosts());
-      } else if (product.code === 'DEKORATIF_PERVAZ') {
-        costJobs.push(fetchDekoratifPervazCosts());
-      } else if (product.code === 'DEKORATIF_PERVAZ_GENIS_KILCIK') {
-        costJobs.push(fetchDekoratifGenisKilcikCosts());
+      for (const priceType of PRICE_TYPES) {
+        if (product.code === 'AYARLI_PERVAZ') {
+          pushJob(fetchAyarliPervazMdfCosts(priceType), priceType);
+        } else if (product.code === 'DEKORATIF_PERVAZ') {
+          pushJob(fetchDekoratifPervazCosts(priceType), priceType);
+        } else if (product.code === 'DEKORATIF_PERVAZ_GENIS_KILCIK') {
+          pushJob(fetchDekoratifGenisKilcikCosts(priceType), priceType);
+        }
       }
     }
   }
@@ -388,29 +544,32 @@ async function loadGroupStatus(
     const pp = settledValue(ppResult[0]);
     const ppError = settledError(ppResult[0]);
     if (ppError) {
-      issues.push({ text: ppError, level: 'attention' });
+      issues.push({ text: ppError, level: 'attention', kind: 'cost' });
       level = worseLevel(level, 'attention');
-    } else {
-      issues.push(...extrasIssues(pp));
+    } else if (pp?.items.some((item) => item.amount == null)) {
+      issues.push({
+        text: PP_MISSING_TEXT,
+        level: 'missing',
+        kind: 'cost',
+        action: settingsAction('SUPURGELIK'),
+      });
     }
   }
 
-  if (costJobs.length > 0) {
+  if (costJobs.length > 0 && settingsGroup) {
     const costResults = await Promise.allSettled(costJobs);
     costResults.forEach((result, index) => {
       const error = settledError(result);
       if (error) {
-        issues.push({ text: error, level: 'attention' });
+        issues.push({ text: error, level: 'attention', kind: 'cost' });
         level = worseLevel(level, 'attention');
         return;
       }
       const value = settledValue(result);
-      if (index === citaIndex.value && value) {
-        issues.push(...collectCitaIssues(value as CitaCostListResponse, extras));
-      }
-      if (supurgelikIndexes.includes(index) && value) {
-        issues.push(...collectSupurgelikIssues(value as SupurgelikCostsResponse));
-      }
+      if (!value) return;
+      issues.push(
+        ...collectCalculatedIssues(value, jobTypes[index], settingsGroup),
+      );
     });
   }
 

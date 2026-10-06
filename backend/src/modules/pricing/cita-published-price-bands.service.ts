@@ -37,7 +37,7 @@ export type ReplaceCitaPublishedPriceBandInput = {
 
 export type UpdateCitaPublishedPriceBandPricesInput = {
   cashPrice: string;
-  cardPrice: string;
+  cardPrice?: string;
 };
 
 @Injectable()
@@ -253,7 +253,7 @@ export class CitaPublishedPriceBandsService {
         minWidthMm: current.minWidthMm,
         maxWidthMm: current.maxWidthMm,
         cashPrice: dto.cashPrice,
-        cardPrice: dto.cardPrice,
+        cardPrice: dto.cardPrice ?? current.cardPrice.toString(),
       },
       now,
     );

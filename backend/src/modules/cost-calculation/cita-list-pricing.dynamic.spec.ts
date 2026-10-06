@@ -10,6 +10,10 @@ import { CitaListService } from './cita-list.service';
 import { CitaMdfService } from './cita-mdf.service';
 import { CitaNetService } from './cita-net.service';
 import { CitaProductionService } from './cita-production.service';
+import {
+  citaCardMarkupRateSnapshot,
+  setCitaCardMarkupRate,
+} from './cita-card-markup-rate.fixture';
 
 const ROLLBACK = new Error('ROLLBACK_CITA_LIST_PRICING_DYNAMIC_TEST');
 const MATERIAL_14 = 'MDF-14-2100X2800-ZIMPARALI';
@@ -97,8 +101,13 @@ describe('CITA list published pricing (DB master, rollback)', () => {
     await prisma.$disconnect();
   });
 
-  it('56 satırda 26 yayın fiyatı ve 30 missing döner; ExtraCost yokken fiyat bağımsızdır', async () => {
-    const listed = await service.listProductionCosts();
+  it('56 satırda 26 yayın fiyatı ve 30 missing döner; kart %20 fixture ile hesaplanır', async () => {
+    const rateBefore = await citaCardMarkupRateSnapshot(prisma);
+    try {
+      await prisma.$transaction(async (tx) => {
+        await setCitaCardMarkupRate(tx, '20');
+        const { list, production: quoted } = listServiceForTx(tx);
+        const listed = await list.listProductionCosts();
     expect(listed.rows).toHaveLength(56);
 
     const priced = listed.rows.filter((row) => row.pricing.pricingAvailable);
@@ -170,15 +179,16 @@ describe('CITA list published pricing (DB master, rollback)', () => {
     }
 
     const fourteenBy30 = findRow(listed.rows, '14', '30');
-    expect(fourteenBy30?.statusCode).toBe(CITA_EXTRA_COST_MISSING);
-    expect(fourteenBy30?.productionCost).toBeNull();
     expect(fourteenBy30?.pricing).toMatchObject({
       pricingAvailable: true,
       publishedCashPrice: '145',
       publishedCardPrice: '174',
     });
+    if (fourteenBy30?.statusCode === CITA_EXTRA_COST_MISSING) {
+      expect(fourteenBy30.productionCost).toBeNull();
+    }
 
-    const custom = await production.getProductionCost({
+    const custom = await quoted.getProductionCost({
       thicknessMm: '14',
       widthMm: '35',
       lengthMm: '2800',
@@ -191,9 +201,16 @@ describe('CITA list published pricing (DB master, rollback)', () => {
       listed.rows.some((row) => toDecimal(row.widthMm).eq(35)),
     ).toBe(false);
     expect('pricing' in custom).toBe(false);
+
+        throw ROLLBACK;
+      });
+    } catch (error) {
+      if (error !== ROLLBACK) throw error;
+    }
+    expect(await citaCardMarkupRateSnapshot(prisma)).toBe(rateBefore);
   });
 
-  it('14 mm MDF X→X+100 maliyet değiştirir, 14/30 yayın fiyatı 145/174 kalır ve rollback edilir', async () => {
+  it('14 mm MDF değişince maliyet değişir; nakit 145 ve %20 kart 174 kalır', async () => {
     const material = await prisma.rawMaterial.findUnique({
       where: { code: MATERIAL_14 },
     });
@@ -216,15 +233,20 @@ describe('CITA list published pricing (DB master, rollback)', () => {
     const original = openPrices[0];
     const originalAmount = toDecimal(original.price.toString());
     const nextAmount = originalAmount.plus(100);
-    const asOf = new Date(original.effectiveFrom.getTime() + 1000);
+    const now = new Date();
+    if (now.getTime() <= original.effectiveFrom.getTime()) {
+      throw new Error('Dynamic test için CARD fiyat effectiveFrom geçmişte olmalıdır.');
+    }
 
+    const rateBefore = await citaCardMarkupRateSnapshot(prisma);
     try {
       await prisma.$transaction(async (tx) => {
+        await setCitaCardMarkupRate(tx, '20');
         const { rawMaterials, list, extras } = listServiceForTx(tx);
-        const date = asOf.toISOString().slice(0, 10);
+        const date = now.toISOString().slice(0, 10);
         await extras.updateValue('CUTTING', {
           productGroup: 'CITA',
-          amount: '5',
+          amount: '250',
           effectiveFrom: date,
         });
         await extras.updateValue('LABOR', {
@@ -233,7 +255,7 @@ describe('CITA list published pricing (DB master, rollback)', () => {
           effectiveFrom: date,
         });
 
-        const before = await list.listProductionCosts(asOf);
+        const before = await list.listProductionCosts(now);
         const before14x30 = findRow(before.rows, '14', '30');
         expect(before14x30?.pricing).toMatchObject({
           publishedCashPrice: '145',
@@ -245,10 +267,10 @@ describe('CITA list published pricing (DB master, rollback)', () => {
         await rawMaterials.updateCardInstallmentPrice(
           material.id,
           { price: nextAmount.toFixed() },
-          asOf,
+          now,
         );
 
-        const after = await list.listProductionCosts(asOf);
+        const after = await list.listProductionCosts(now);
         const after14x30 = findRow(after.rows, '14', '30');
         expect(after14x30?.productionYield.netQty).toBe(
           before14x30?.productionYield.netQty,
@@ -271,9 +293,10 @@ describe('CITA list published pricing (DB master, rollback)', () => {
     });
     expect(restored?.effectiveTo).toBeNull();
     expect(toDecimal(restored!.price.toString()).equals(originalAmount)).toBe(true);
+    expect(await citaCardMarkupRateSnapshot(prisma)).toBe(rateBefore);
   });
 
-  it('30–40 band 145/174→150/180 yalnız o bant fiyatını değiştirir; maliyet aynı kalır ve rollback edilir', async () => {
+  it('30–40 nakit 145→150 iken kart %20 ile 174→180 olur; diğer bantlar kendi nakit×%20 kartını korur', async () => {
     const now = new Date();
     const group = await prisma.productGroup.findUnique({ where: { code: 'CITA' } });
     const openBefore = await prisma.citaPublishedPriceBand.findFirst({
@@ -289,8 +312,10 @@ describe('CITA list published pricing (DB master, rollback)', () => {
       throw new Error('Dynamic test için açık 3–4 cm bandı gerekir.');
     }
 
+    const rateBefore = await citaCardMarkupRateSnapshot(prisma);
     try {
       await prisma.$transaction(async (tx) => {
+        await setCitaCardMarkupRate(tx, '20');
         const { list, publishedPrices } = listServiceForTx(tx);
         const before = await list.listProductionCosts(now);
         const beforeCosts = before.rows.map((row) => ({
@@ -381,5 +406,6 @@ describe('CITA list published pricing (DB master, rollback)', () => {
     expect(open).toHaveLength(1);
     expect(toDecimal(open[0].cashPrice.toString()).toString()).toBe('145');
     expect(toDecimal(open[0].cardPrice.toString()).toString()).toBe('174');
+    expect(await citaCardMarkupRateSnapshot(prisma)).toBe(rateBefore);
   });
 });

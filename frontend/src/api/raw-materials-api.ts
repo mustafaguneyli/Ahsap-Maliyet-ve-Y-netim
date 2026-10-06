@@ -61,6 +61,19 @@ export function updateRawMaterialPrices(
   });
 }
 
+export function updateRawMaterialCashPrice(
+  id: string,
+  payload: UpdateCardInstallmentPricePayload,
+): Promise<UpdateCardInstallmentPriceResponse> {
+  return apiRequest<UpdateCardInstallmentPriceResponse>(
+    `/raw-materials/${id}/prices/cash`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
 export function updateRawMaterialCardInstallmentPrice(
   id: string,
   payload: UpdateCardInstallmentPricePayload,

@@ -16,7 +16,13 @@ import {
 
 const NOW = new Date('2026-09-16T12:00:00.000Z');
 const GROUP = { id: 'cita-group', code: 'CITA', name: 'Çıta', isActive: true };
-const PRODUCT = { id: 'cita-product', code: 'CITA', name: 'Çıta', isActive: true };
+const PRODUCT = {
+  id: 'cita-product',
+  code: 'CITA',
+  name: 'Çıta',
+  isActive: true,
+  productGroupId: GROUP.id,
+};
 
 function netQtyForWidth(widthMm: number): number {
   const row = CITA_STANDARD_FALLBACK_NET.find((item) => item.widthMm === widthMm);
@@ -82,6 +88,22 @@ function createPrisma(rows: ReturnType<typeof masterRow>[]) {
     citaPublishedPriceBand: {
       findMany: jest.fn().mockResolvedValue(publishedBandRows()),
     },
+    pricingSetting: {
+      findMany: jest.fn().mockResolvedValue([
+        {
+          isActive: true,
+          productGroupId: GROUP.id,
+          productId: null,
+          cardMarkupRate: { toString: () => '20' },
+        },
+      ]),
+    },
+    productPricingOverride: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
+    productSize: {
+      findMany: jest.fn().mockResolvedValue([]),
+    },
   };
 }
 
@@ -124,6 +146,8 @@ function extraCostMissingResult(query: {
     extraCostsAvailable: false,
     missingExtraCosts: ['CUTTING', 'LABOR'] as Array<'CUTTING' | 'LABOR'>,
     statusCode: CITA_EXTRA_COST_MISSING,
+    cuttingBatchCost: null,
+    cuttingUnitCost: null,
   };
 }
 
@@ -255,11 +279,13 @@ describe('CitaListService', () => {
 
     const findPrice = (thicknessMm: string, widthMm: string) =>
       find(thicknessMm, widthMm)?.pricing;
-    expect(findPrice('12', '10')).toEqual({
+    expect(findPrice('12', '10')).toMatchObject({
       pricingAvailable: true,
       priceBand: { minWidthMm: 10, maxWidthMm: 20 },
       publishedCashPrice: '115',
       publishedCardPrice: '138',
+      cardStatusCode: null,
+      cardStatusMessage: null,
       statusCode: null,
     });
     expect(findPrice('12', '30')).toMatchObject({
@@ -297,6 +323,7 @@ describe('CitaListService', () => {
     const result = await service.listProductionCosts(NOW);
 
     expect(result.verifiedMeasureCount).toBe(0);
+    expect(result.materialPriceType).toBe('CARD_INSTALLMENT');
     expect(result.rows).toEqual([]);
     expect(citaProductionService.getProductionCost).not.toHaveBeenCalled();
   });
@@ -403,6 +430,7 @@ describe('CitaListService', () => {
       missing.every(
         (row) =>
           row.statusCode === CITA_RAW_MATERIAL_PRICE_MISSING &&
+          row.materialPriceType === 'CARD_INSTALLMENT' &&
           row.productionCost === null &&
           row.mdfUnitCost === null &&
           row.productionYield.source === 'MASTER',
@@ -431,11 +459,13 @@ describe('CitaListService', () => {
       async (query) => ({
         ...extraCostMissingResult(query),
         extraCosts: [
-          { code: 'CUTTING', amount: '5' },
+          { code: 'CUTTING', amount: '250' },
           { code: 'LABOR', amount: '10' },
         ],
-        extraCostsTotal: '15',
-        productionCost: '25',
+        extraCostsTotal: '11',
+        productionCost: '21',
+        cuttingBatchCost: '250',
+        cuttingUnitCost: '1',
         extraCostsAvailable: true,
         missingExtraCosts: [],
         statusCode: null,
@@ -444,8 +474,9 @@ describe('CitaListService', () => {
 
     const result = await service.listProductionCosts(NOW);
     expect(result.rows).toHaveLength(1);
-    expect(result.rows[0].extraCostsTotal).toBe('15');
-    expect(result.rows[0].productionCost).toBe('25');
+    expect(result.rows[0].extraCostsTotal).toBe('11');
+    expect(result.rows[0].productionCost).toBe('21');
+    expect(result.rows[0].cuttingUnitCost).toBe('1');
     expect(result.rows[0].statusCode).toBeNull();
   });
 
@@ -461,5 +492,58 @@ describe('CitaListService', () => {
     );
 
     await expect(service.listProductionCosts(NOW)).rejects.toThrow(/MASTER/);
+  });
+
+  it('CASH listesi aynı MASTER satırına alış türünü taşır ve eksik peşinde karta düşmez', async () => {
+    const row = CITA_PRODUCTION_YIELD_SEEDS.find(
+      (item) => item.materialCode === 'MDF-14-2100X2800-ZIMPARALI' && item.pieceWidthMm === 40,
+    );
+    if (!row) {
+      throw new Error('14 mm / 40 mm MASTER yok.');
+    }
+    const { service, citaProductionService, citaNetService } = buildService(
+      [masterRow(row, 0)],
+      async () => {
+        throw new CitaRawMaterialPriceMissingException(
+          'MDF-14-2100X2800-ZIMPARALI',
+          'CASH',
+        );
+      },
+    );
+    citaNetService.resolveNet.mockResolvedValue({
+      productCode: 'CITA',
+      thicknessMm: '14',
+      widthMm: '40',
+      lengthMm: '2800',
+      rawMaterial: {
+        code: 'MDF-14-2100X2800-ZIMPARALI',
+        sheetWidthMm: 2100,
+        sheetLengthMm: 2800,
+      },
+      bladeAllowanceMm: 4,
+      countSideMm: 2100,
+      effectiveCutPitchMm: '44',
+      netQty: 47,
+      source: 'MASTER',
+    });
+
+    const result = await service.listProductionCosts(NOW, 'CASH');
+
+    expect(result.materialPriceType).toBe('CASH');
+    expect(citaProductionService.getProductionCost).toHaveBeenCalledWith(
+      {
+        thicknessMm: '14',
+        widthMm: '40',
+        lengthMm: '2800',
+        materialPriceType: 'CASH',
+      },
+      NOW,
+    );
+    expect(result.rows[0]).toMatchObject({
+      statusCode: CITA_RAW_MATERIAL_PRICE_MISSING,
+      materialPriceType: 'CASH',
+      mdfUnitCost: null,
+      sheetPrice: null,
+    });
   });
 });

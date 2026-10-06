@@ -11,6 +11,9 @@ import { PervazModule } from './modules/pervaz/pervaz.module';
 import { ProductsModule } from './modules/products/products.module';
 import { ProductionYieldsModule } from './modules/production-yields/production-yields.module';
 import { RecipesModule } from './modules/recipes/recipes.module';
+import { OrderDocumentsModule } from './modules/order-documents/order-documents.module';
+import { DoorBuildModule } from './modules/door-build/door-build.module';
+import { PriceListModule } from './modules/price-list/price-list.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
@@ -31,6 +34,9 @@ import { PrismaModule } from './prisma/prisma.module';
     PriceOverridesModule,
     AuditModule,
     CostCalculationModule,
+    PriceListModule,
+    OrderDocumentsModule,
+    DoorBuildModule,
   ],
 })
 export class AppModule {}

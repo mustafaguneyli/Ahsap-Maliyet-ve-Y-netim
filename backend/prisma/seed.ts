@@ -17,6 +17,7 @@ import { seedDoorFrameProductSizes } from '../src/modules/products/door-frame-pr
 import { seedPervazProducts } from '../src/modules/products/pervaz-product-seed';
 import { seedSupurgelikProductMaster } from '../src/modules/products/supurgelik-product-seed';
 import { seedCitaProductMaster } from '../src/modules/products/cita-product-seed';
+import { seedDoorBuildProductGroup } from '../src/modules/products/door-build-product-group-seed';
 import { seedKilcikTypes } from '../src/modules/pervaz/kilcik-type-seed';
 import { seedAyarliPervazKilcikYields } from '../src/modules/pervaz/ayarli-pervaz-kilcik-yield-seed';
 import { seedDekoratifPervazKilcikYields } from '../src/modules/pervaz/dekoratif-pervaz-kilcik-yield-seed';
@@ -416,6 +417,11 @@ async function main(): Promise<void> {
     const citaProductReport = await seedCitaProductMaster(prisma);
     console.log(
       `Çıta master seed: grupYeni=${citaProductReport.productGroupCreated}, ürünYeni=${citaProductReport.productsCreated}, ürünMevcut=${citaProductReport.productsSkippedExisting}, ölçüYeni=${citaProductReport.sizesCreated}, ölçüMevcut=${citaProductReport.sizesSkippedExisting}`,
+    );
+
+    const doorBuildGroupReport = await seedDoorBuildProductGroup(prisma);
+    console.log(
+      `Kapı İmalatı grup seed: yeni=${doorBuildGroupReport.created ? 1 : 0}, aynı=${doorBuildGroupReport.unchanged ? 1 : 0} (oran uydurulmaz)`,
     );
 
     const citaYieldReport = await seedCitaProductionYields(prisma);

@@ -218,17 +218,14 @@ describe('DekoratifPervazCalculator', () => {
         extraCosts: { cutting: '4', glue: '4', labor: '4' },
         profitRate: '15',
         decorativePremiumRate: row.premiumRate,
-        cardFixedSurchargeAmount: '2',
+        cardMarkupRate: '20',
       });
 
       expect(result.pricing.publishedSalePrice).toBe(row.published);
       expect(result.pricing.cardSaleAvailable).toBe(true);
-      expect(result.pricing.cardPricingType).toBe('FIXED_SURCHARGE');
+      expect(result.pricing.cardPricingType).toBe('PERCENT_MARKUP');
       expect(result.pricing.cardSalePrice).toBe(
-        toDecimal(row.published).plus('2').toFixed(),
-      );
-      expect(result.pricing.cardSalePrice).toBe(
-        toDecimal(result.pricing.publishedSalePrice).plus('2').toFixed(),
+        toDecimal(row.published).times('1.2').toFixed(),
       );
     },
   );

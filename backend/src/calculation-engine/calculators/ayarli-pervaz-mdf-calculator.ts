@@ -2,11 +2,11 @@ import { BadRequestException } from '@nestjs/common';
 import { roundUpToWholeTl, toDecimal } from '../../common/decimal/decimal.util';
 import type { PervazQtySource } from '../../modules/pervaz/pervaz-qty-resolver';
 import {
-  applyPervazFixedCardSale,
+  applyPervazPercentCardSale,
   type PervazCardSaleBreakdown,
 } from './pervaz-card-sale';
 
-export type AyarliPervazMdfPriceType = 'CARD_INSTALLMENT';
+export type AyarliPervazMdfPriceType = 'CASH' | 'CARD_INSTALLMENT';
 
 export type AyarliPervazMdfPartInput = {
   rawMaterialCode: string;
@@ -40,8 +40,8 @@ export type AyarliPervazMdfInput = {
   profitRate: string;
   /** Resolver’dan gelir; yoksa ROUNDUP sonrası ekleme yok. */
   adjustmentAmount?: string | null;
-  /** Product-level sabit TL; yüzde kart farkı kullanılmaz. */
-  cardFixedSurchargeAmount?: string | null;
+  /** Group-scope yüzde kart farkı. */
+  cardMarkupRate?: string | null;
   /** Yalnız TRUE iken kart yayınlanır. */
   cardSaleEnabled?: boolean | null;
 };
@@ -88,10 +88,15 @@ export type AyarliPervazMdfResult = {
  * profitRate / adjustmentAmount input’tan gelir; satır if/thickness hardcode yok.
  * roundedSalePrice = ROUNDUP(priceBeforeRounding, 0) — roundUpToWholeTl.
  * publishedSalePrice = roundedSalePrice + adjustmentAmount (ROUNDUP sonrası).
- * Kart: cardSaleEnabled === true ise publishedSalePrice + cardFixedSurchargeAmount; ROUNDUP yok.
+ * Kart: cardSaleEnabled === true ise publishedSalePrice × (1 + cardMarkupRate/100); ROUNDUP yok.
  */
 export class AyarliPervazMdfCalculator {
   calculate(input: AyarliPervazMdfInput): AyarliPervazMdfResult {
+    if (input.mainPiece.sheetPriceType !== input.kilcik.sheetPriceType) {
+      throw new BadRequestException(
+        'Pervaz ana parça ve kılçık aynı MDF alış türünü kullanmalıdır.',
+      );
+    }
     const mainPiece = this.calculatePart(input.mainPiece, 'ana pervaz');
     const kilcik = this.calculatePart(input.kilcik, 'kılçık');
     const totalMdfCost = toDecimal(mainPiece.unitCost).plus(toDecimal(kilcik.unitCost));
@@ -101,7 +106,7 @@ export class AyarliPervazMdfCalculator {
       productionCost,
       input.profitRate,
       input.adjustmentAmount,
-      input.cardFixedSurchargeAmount,
+      input.cardMarkupRate,
       input.cardSaleEnabled === true,
     );
 
@@ -123,7 +128,7 @@ export class AyarliPervazMdfCalculator {
     productionCost: ReturnType<typeof toDecimal>,
     profitRateRaw: string,
     adjustmentAmountRaw: string | null | undefined,
-    cardFixedSurchargeAmount: string | null | undefined,
+    cardMarkupRate: string | null | undefined,
     cardSaleAvailable: boolean,
   ): AyarliPervazPricingBreakdown {
     const profitRate = this.parseProfitRate(profitRateRaw);
@@ -133,9 +138,9 @@ export class AyarliPervazMdfCalculator {
     const roundedSalePrice = roundUpToWholeTl(priceBeforeRounding);
     const adjustment = this.parseAdjustmentAmount(adjustmentAmountRaw);
     const publishedSalePrice = roundedSalePrice.plus(adjustment.amount);
-    const card = applyPervazFixedCardSale({
+    const card = applyPervazPercentCardSale({
       publishedCashPrice: publishedSalePrice.toFixed(),
-      cardFixedSurchargeAmount,
+      cardMarkupRate,
       cardSaleAvailable,
     });
     return {
@@ -217,9 +222,9 @@ export class AyarliPervazMdfCalculator {
     part: AyarliPervazMdfPartInput,
     label: string,
   ): AyarliPervazMdfPartResult {
-    if (part.sheetPriceType !== 'CARD_INSTALLMENT') {
+    if (part.sheetPriceType !== 'CASH' && part.sheetPriceType !== 'CARD_INSTALLMENT') {
       throw new BadRequestException(
-        `Ayarlı Pervaz ${label} MDF maliyeti yalnız CARD_INSTALLMENT alış fiyatı kullanır.`,
+        `Ayarlı Pervaz ${label} MDF alış türü CASH veya CARD_INSTALLMENT olmalıdır.`,
       );
     }
     if (!Number.isInteger(part.netQty) || part.netQty <= 0) {

@@ -94,7 +94,7 @@ function kilcikPart(netQty: number) {
 function calculateAyarli(row: AyarliPervazExcelGoldenRow, overrides?: {
   extraCosts?: { cutting: string; glue: string; labor: string };
   profitRate?: string;
-  cardFixedSurchargeAmount?: string;
+  cardMarkupRate?: string | null;
 }) {
   return new AyarliPervazMdfCalculator().calculate({
     productCode: 'AYARLI_PERVAZ',
@@ -112,8 +112,10 @@ function calculateAyarli(row: AyarliPervazExcelGoldenRow, overrides?: {
     extraCosts: overrides?.extraCosts ?? extraCosts(row),
     profitRate: overrides?.profitRate ?? row.profitRate,
     adjustmentAmount: row.adjustmentAmount,
-    cardFixedSurchargeAmount:
-      overrides?.cardFixedSurchargeAmount ?? row.cardFixedSurchargeAmount,
+    cardMarkupRate:
+      overrides?.cardMarkupRate !== undefined
+        ? overrides.cardMarkupRate
+        : PERVAZ_EXCEL_GOLDEN_INPUTS.cardMarkupRate,
     cardSaleEnabled: row.cardSaleEnabled,
   });
 }
@@ -121,7 +123,7 @@ function calculateAyarli(row: AyarliPervazExcelGoldenRow, overrides?: {
 function calculateDekoratif(row: DekoratifPervazExcelGoldenRow, overrides?: {
   extraCosts?: { cutting: string; glue: string; labor: string };
   profitRate?: string;
-  cardFixedSurchargeAmount?: string;
+  cardMarkupRate?: string | null;
 }) {
   return new DekoratifPervazCalculator().calculate({
     productCode: 'DEKORATIF_PERVAZ',
@@ -139,9 +141,10 @@ function calculateDekoratif(row: DekoratifPervazExcelGoldenRow, overrides?: {
     extraCosts: overrides?.extraCosts ?? extraCosts(row),
     profitRate: overrides?.profitRate ?? row.profitRate,
     decorativePremiumRate: row.decorativePremiumRate,
-    cardFixedSurchargeAmount:
-      overrides?.cardFixedSurchargeAmount ??
-      PERVAZ_EXCEL_GOLDEN_INPUTS.cardFixedSurchargeAmount,
+    cardMarkupRate:
+      overrides?.cardMarkupRate !== undefined
+        ? overrides.cardMarkupRate
+        : PERVAZ_EXCEL_GOLDEN_INPUTS.cardMarkupRate,
   });
 }
 
@@ -269,13 +272,19 @@ describe('Pervaz Excel golden regression (DB yok)', () => {
         actual.pricing.cardSaleAvailable,
         golden.cardSaleEnabled,
       );
-      assertExact(
-        product,
-        golden,
-        'cardSalePrice',
-        actual.pricing.cardSalePrice,
-        golden.expectedCardPrice,
-      );
+      if (golden.cardSaleEnabled) {
+        expect(actual.pricing.cardSalePrice).toBe(
+          toDecimal(golden.expectedPublishedCash)
+            .times(
+              toDecimal(1).plus(
+                toDecimal(PERVAZ_EXCEL_GOLDEN_INPUTS.cardMarkupRate).div(100),
+              ),
+            )
+            .toFixed(),
+        );
+      } else {
+        expect(actual.pricing.cardSalePrice).toBeNull();
+      }
     }
   });
 
@@ -301,24 +310,24 @@ describe('Ayarlı Pervaz kart golden', () => {
   const enabled = AYARLI_PERVAZ_EXCEL_GOLDEN_ROWS.filter((r) => r.cardSaleEnabled);
   const unlisted = AYARLI_PERVAZ_EXCEL_GOLDEN_ROWS.filter((r) => !r.cardSaleEnabled);
 
-  it(`FİYAT LİSTESİ ${PERVAZ_EXCEL_GOLDEN_COUNTS.ayarliCardEnabled} kartlı satır: nakit + 2, ikinci ROUNDUP yok`, () => {
+  it(`FİYAT LİSTESİ ${PERVAZ_EXCEL_GOLDEN_COUNTS.ayarliCardEnabled} kartlı satır: nakit × (1+oran/100), ikinci ROUNDUP yok`, () => {
     expect(enabled).toHaveLength(PERVAZ_EXCEL_GOLDEN_COUNTS.ayarliCardEnabled);
 
     for (const golden of enabled) {
       const actual = calculateAyarli(golden);
       expect(actual.pricing.cardSaleAvailable).toBe(true);
-      expect(actual.pricing.cardPricingType).toBe('FIXED_SURCHARGE');
-      expect(actual.pricing.cardFixedSurchargeAmount).toBe(
-        PERVAZ_EXCEL_GOLDEN_INPUTS.cardFixedSurchargeAmount,
+      expect(actual.pricing.cardPricingType).toBe('PERCENT_MARKUP');
+      expect(actual.pricing.cardMarkupRate).toBe(
+        PERVAZ_EXCEL_GOLDEN_INPUTS.cardMarkupRate,
       );
       expect(actual.pricing.cardSalePrice).toBe(
         toDecimal(golden.expectedPublishedCash)
-          .plus(PERVAZ_EXCEL_GOLDEN_INPUTS.cardFixedSurchargeAmount)
+          .times(
+            toDecimal(1).plus(
+              toDecimal(PERVAZ_EXCEL_GOLDEN_INPUTS.cardMarkupRate).div(100),
+            ),
+          )
           .toFixed(),
-      );
-      expect(actual.pricing.cardSalePrice).toBe(golden.expectedCardPrice);
-      expect(actual.pricing.cardSalePrice).toBe(
-        toDecimal(actual.pricing.publishedSalePrice).plus('2').toFixed(),
       );
     }
   });
@@ -333,7 +342,7 @@ describe('Ayarlı Pervaz kart golden', () => {
     }
   });
 
-  it('18 mm 10×220: ROUNDUP 178 + adjustment 1 → nakit 179 → kart 181', () => {
+  it('18 mm 10×220: ROUNDUP 178 + adjustment 1 → nakit 179 → kart 214.8', () => {
     const golden = AYARLI_PERVAZ_EXCEL_GOLDEN_ROWS.find(
       (r) => r.thicknessMm === 18 && r.widthMm === 100 && r.lengthMm === 2200,
     );
@@ -342,23 +351,17 @@ describe('Ayarlı Pervaz kart golden', () => {
     expect(actual.pricing.roundedSalePrice).toBe('178');
     expect(actual.pricing.adjustmentAmount).toBe('1');
     expect(actual.pricing.publishedSalePrice).toBe('179');
-    expect(actual.pricing.cardSalePrice).toBe('181');
-    expect(toDecimal(actual.pricing.publishedSalePrice).plus('2').toFixed()).toBe(
-      '181',
-    );
+    expect(actual.pricing.cardSalePrice).toBe('214.8');
   });
 });
 
 describe('Dekoratif Pervaz golden', () => {
-  it(`${PERVAZ_EXCEL_GOLDEN_COUNTS.dekoratif} satır: %15 kâr, 12/14 %50, 18 %75, nakit+2 kart`, () => {
+  it(`${PERVAZ_EXCEL_GOLDEN_COUNTS.dekoratif} satır: %15 kâr, 12/14 %50, 18 %75, nakit × %20 kart`, () => {
     expect(DEKORATIF_PERVAZ_EXCEL_GOLDEN_ROWS).toHaveLength(
       PERVAZ_EXCEL_GOLDEN_COUNTS.dekoratif,
     );
     expect(DEKORATIF_PERVAZ_EXCEL_GOLDEN_ROWS.map((r) => r.expectedPublishedCash)).toEqual(
       ['201', '250', '266', '275', '311', '346'],
-    );
-    expect(DEKORATIF_PERVAZ_EXCEL_GOLDEN_ROWS.map((r) => r.expectedCardPrice)).toEqual(
-      ['203', '252', '268', '277', '313', '348'],
     );
 
     for (const golden of DEKORATIF_PERVAZ_EXCEL_GOLDEN_ROWS) {
@@ -411,16 +414,16 @@ describe('Dekoratif Pervaz golden', () => {
         actual.pricing.publishedSalePrice,
         golden.expectedPublishedCash,
       );
-      assertExact(
-        product,
-        golden,
-        'cardSalePrice',
-        actual.pricing.cardSalePrice,
-        golden.expectedCardPrice,
-      );
       expect(actual.pricing.cardSaleAvailable).toBe(true);
+      expect(actual.pricing.cardPricingType).toBe('PERCENT_MARKUP');
       expect(actual.pricing.cardSalePrice).toBe(
-        toDecimal(actual.pricing.publishedSalePrice).plus('2').toFixed(),
+        toDecimal(actual.pricing.publishedSalePrice)
+          .times(
+            toDecimal(1).plus(
+              toDecimal(PERVAZ_EXCEL_GOLDEN_INPUTS.cardMarkupRate).div(100),
+            ),
+          )
+          .toFixed(),
       );
     }
   });
@@ -615,7 +618,9 @@ describe('dinamik ExtraCost / PricingSetting / kart farkı', () => {
     expect(after.pricing.cardSalePrice).not.toBe(before.pricing.cardSalePrice);
     expect(
       toDecimal(after.pricing.cardSalePrice!).minus(after.pricing.publishedSalePrice).toFixed(),
-    ).toBe('2');
+    ).toBe(
+      toDecimal(after.pricing.publishedSalePrice).times('0.2').toFixed(),
+    );
   });
 
   it('profitRate 15→17 normal satırı değiştirir; 16 mm 10×250 %20 kalır', () => {
@@ -632,15 +637,15 @@ describe('dinamik ExtraCost / PricingSetting / kart farkı', () => {
     expect(special.pricing.publishedSalePrice).toBe('215');
   });
 
-  it('kart farkı 2→3: nakit aynı, kartlı +1, kapsam dışı null', () => {
-    const cashSame = calculateAyarli(cardRow, { cardFixedSurchargeAmount: '3' });
-    const listedTwo = calculateAyarli(cardRow);
-    expect(cashSame.pricing.publishedSalePrice).toBe(listedTwo.pricing.publishedSalePrice);
+  it('kart oranı 20→25: nakit aynı, kart değişir, kapsam dışı null', () => {
+    const cashSame = calculateAyarli(cardRow, { cardMarkupRate: '25' });
+    const listedTwenty = calculateAyarli(cardRow);
+    expect(cashSame.pricing.publishedSalePrice).toBe(listedTwenty.pricing.publishedSalePrice);
     expect(cashSame.pricing.publishedSalePrice).toBe('179');
-    expect(listedTwo.pricing.cardSalePrice).toBe('181');
-    expect(cashSame.pricing.cardSalePrice).toBe('182');
+    expect(listedTwenty.pricing.cardSalePrice).toBe('214.8');
+    expect(cashSame.pricing.cardSalePrice).toBe('223.75');
 
-    const stillNull = calculateAyarli(unlisted, { cardFixedSurchargeAmount: '3' });
+    const stillNull = calculateAyarli(unlisted, { cardMarkupRate: '25' });
     expect(stillNull.pricing.publishedSalePrice).toBe('118');
     expect(stillNull.pricing.cardSaleAvailable).toBe(false);
     expect(stillNull.pricing.cardSalePrice).toBeNull();
@@ -664,13 +669,14 @@ describe('PervazCostTable UI smoke (mevcut kaynak, yeni özellik yok)', () => {
     'utf8',
   );
 
-  it('Fiyat grouped header colSpan=7; ayarlı/dekoratif 7 alt kolon', () => {
-    expect(tableSrc).toContain('<th colSpan={7}>Fiyat</th>');
+  it('Fiyat grouped header colSpan=6; alış türüne göre tek satış sütunu', () => {
+    expect(tableSrc).toContain('<th colSpan={6}>Fiyat</th>');
     expect(tableSrc).toContain('<th colSpan={4}>Masraflar</th>');
     expect(tableSrc).toContain('<th colSpan={2}>Ana MDF</th>');
     expect(tableSrc).toContain('<th colSpan={2}>Kılçık</th>');
-    expect(tableSrc).toContain('Nakit Satış');
-    expect(tableSrc).toContain('Kart/Taksit');
+    expect(tableSrc).toContain('salePriceResultLabel(materialPriceType)');
+    expect(tableSrc).toContain('showsCashSalePrice');
+    expect(tableSrc).toContain('showsCardSalePrice');
     expect(tableSrc).toContain('Yuvarlanmış');
     expect(tableSrc).toContain('Düzeltme');
     expect(tableSrc).toContain('Dek. Fark %');

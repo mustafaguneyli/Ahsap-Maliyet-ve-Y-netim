@@ -1,4 +1,11 @@
 import { apiRequest } from '../lib/api';
+import {
+  DEFAULT_MATERIAL_PRICE_TYPE,
+  withMaterialPriceType,
+  type MaterialPriceType,
+} from '../lib/material-price-type';
+
+export type { MaterialPriceType };
 
 export type DoorFrameMdfPart = {
   thicknessMm: string;
@@ -25,13 +32,14 @@ export type DoorFrameVatPricing = {
   vatAmount: string;
   costWithVat: string;
   profitRate: string;
+  profitRateSource?: string;
   profitAmount: string;
   priceBeforeRounding: string;
   roundedSalePrice: string;
   cashSalePrice: string;
-  cardMarkupRate: string;
-  cardPriceBeforeRounding: string;
-  cardSalePrice: string;
+  cardMarkupRate: string | null;
+  cardPriceBeforeRounding: string | null;
+  cardSalePrice: string | null;
   calculatedCashPrice: string;
   cashOverride: {
     id: string;
@@ -39,7 +47,9 @@ export type DoorFrameVatPricing = {
     reason: string | null;
   } | null;
   publishedCashPrice: string;
-  publishedCardPrice: string;
+  publishedCardPrice: string | null;
+  cardStatusCode?: string | null;
+  cardStatusMessage?: string | null;
 };
 
 export type DoorFrameMdfRow = {
@@ -58,24 +68,29 @@ export type DoorFrameMdfResponse = {
   productGroupName: string;
   variant: '34_MM' | '30_MM';
   priceType: string;
+  materialPriceType?: MaterialPriceType;
   extraCosts: DoorFrameExtraCosts;
   vatRate: string;
   profitRate: string;
-  cardMarkupRate: string;
+  cardMarkupRate: string | null;
   rows: DoorFrameMdfRow[];
 };
 
 export function fetchDoorFrameMdfCosts(
   variant: '34_MM' | '30_MM',
+  materialPriceType: MaterialPriceType = DEFAULT_MATERIAL_PRICE_TYPE,
 ): Promise<DoorFrameMdfResponse> {
   return apiRequest<DoorFrameMdfResponse>(
-    `/cost-calculation/door-frame/mdf?variant=${variant}`,
+    withMaterialPriceType(
+      `/cost-calculation/door-frame/mdf?variant=${variant}`,
+      materialPriceType,
+    ),
   );
 }
 
 export type AyarliPervazMdfPart = {
   rawMaterialCode: string;
-  sheetPriceType: 'CARD_INSTALLMENT';
+  sheetPriceType: MaterialPriceType;
   sheetPrice: string;
   netQty: number;
   yieldSource: string;
@@ -85,6 +100,8 @@ export type AyarliPervazMdfPart = {
 export type AyarliPervazPricing = {
   profitRate: string;
   profitRateSource:
+    | 'SIZE_OVERRIDE'
+    | 'PRODUCT_OVERRIDE'
     | 'ROW_EXCEPTION'
     | 'PRODUCT_PRICING_SETTING'
     | 'GROUP_PRICING_SETTING'
@@ -96,16 +113,19 @@ export type AyarliPervazPricing = {
   adjustmentSource: 'ROW_EXCEPTION' | 'NONE';
   publishedSalePrice: string;
   cardSaleAvailable: boolean;
-  cardPricingType: 'FIXED_SURCHARGE' | 'NONE';
-  cardFixedSurchargeAmount: string | null;
+  cardPricingType: 'PERCENT_MARKUP' | 'NONE';
+  cardMarkupRate: string | null;
   cardSalePrice: string | null;
+  cardStatusCode: string | null;
+  cardStatusMessage: string | null;
 };
 
 export type AyarliPervazMdfRow = {
   productGroupCode: 'PERVAZ';
   productGroupName: string;
   productCode: 'AYARLI_PERVAZ';
-  priceType: 'CARD_INSTALLMENT';
+  priceType: MaterialPriceType;
+  materialPriceType?: MaterialPriceType;
   asOf: string;
   thicknessMm: number;
   widthMm: number;
@@ -131,15 +151,19 @@ export type AyarliPervazMdfResponse = {
   rows: AyarliPervazMdfRow[];
 };
 
-export function fetchAyarliPervazMdfCosts(): Promise<AyarliPervazMdfResponse> {
+export function fetchAyarliPervazMdfCosts(
+  materialPriceType: MaterialPriceType = DEFAULT_MATERIAL_PRICE_TYPE,
+): Promise<AyarliPervazMdfResponse> {
   return apiRequest<AyarliPervazMdfResponse>(
-    '/cost-calculation/pervaz/ayarli',
+    withMaterialPriceType('/cost-calculation/pervaz/ayarli', materialPriceType),
   );
 }
 
 export type DekoratifPervazPricing = {
   profitRate: string;
   profitRateSource:
+    | 'SIZE_OVERRIDE'
+    | 'PRODUCT_OVERRIDE'
     | 'ROW_EXCEPTION'
     | 'PRODUCT_PRICING_SETTING'
     | 'GROUP_PRICING_SETTING'
@@ -153,9 +177,11 @@ export type DekoratifPervazPricing = {
   adjustmentAmount: null;
   publishedSalePrice: string;
   cardSaleAvailable: boolean;
-  cardPricingType: 'FIXED_SURCHARGE' | 'NONE';
-  cardFixedSurchargeAmount: string | null;
+  cardPricingType: 'PERCENT_MARKUP' | 'NONE';
+  cardMarkupRate: string | null;
   cardSalePrice: string | null;
+  cardStatusCode: string | null;
+  cardStatusMessage: string | null;
 };
 
 export type DekoratifPervazRow = Omit<
@@ -174,9 +200,14 @@ export type DekoratifPervazResponse = {
   rows: DekoratifPervazRow[];
 };
 
-export function fetchDekoratifPervazCosts(): Promise<DekoratifPervazResponse> {
+export function fetchDekoratifPervazCosts(
+  materialPriceType: MaterialPriceType = DEFAULT_MATERIAL_PRICE_TYPE,
+): Promise<DekoratifPervazResponse> {
   return apiRequest<DekoratifPervazResponse>(
-    '/cost-calculation/pervaz/dekoratif',
+    withMaterialPriceType(
+      '/cost-calculation/pervaz/dekoratif',
+      materialPriceType,
+    ),
   );
 }
 
@@ -195,9 +226,14 @@ export type DekoratifGenisKilcikResponse = Omit<
   rows: DekoratifGenisKilcikRow[];
 };
 
-export function fetchDekoratifGenisKilcikCosts(): Promise<DekoratifGenisKilcikResponse> {
+export function fetchDekoratifGenisKilcikCosts(
+  materialPriceType: MaterialPriceType = DEFAULT_MATERIAL_PRICE_TYPE,
+): Promise<DekoratifGenisKilcikResponse> {
   return apiRequest<DekoratifGenisKilcikResponse>(
-    '/cost-calculation/pervaz/dekoratif-genis-kilcik',
+    withMaterialPriceType(
+      '/cost-calculation/pervaz/dekoratif-genis-kilcik',
+      materialPriceType,
+    ),
   );
 }
 
@@ -230,6 +266,10 @@ export type SupurgelikPricing = {
   decorativeAmount?: string | null;
   priceBeforeDecorativeRounding?: string | null;
   publishedCashPrice: string | null;
+  publishedCardPrice: string | null;
+  cardMarkupRate?: string | null;
+  cardStatusCode?: string | null;
+  cardStatusMessage?: string | null;
   statusCode?: SupurgelikRowErrorCode | null;
 };
 
@@ -245,9 +285,10 @@ export type SupurgelikCostRow = {
     sheetLengthMm: number;
   };
   sheetPrice: {
-    priceType: 'CARD_INSTALLMENT';
+    priceType: MaterialPriceType;
     amount: string;
   } | null;
+  materialPriceType?: MaterialPriceType;
   productionYield: {
     netQty: number;
     scope: 'GENERIC';
@@ -273,6 +314,7 @@ export type SupurgelikCostsResponse = {
   productGroupName: string;
   productCode: SupurgelikProductCode;
   productName: string;
+  materialPriceType?: MaterialPriceType;
   asOf: string;
   masterCount: number;
   rowCount: number;
@@ -281,16 +323,20 @@ export type SupurgelikCostsResponse = {
 
 export function fetchSupurgelikCosts(
   productCode: SupurgelikProductCode,
+  materialPriceType: MaterialPriceType = DEFAULT_MATERIAL_PRICE_TYPE,
 ): Promise<SupurgelikCostsResponse> {
   return apiRequest<SupurgelikCostsResponse>(
-    `/cost-calculation/supurgelik?productCode=${encodeURIComponent(productCode)}`,
+    withMaterialPriceType(
+      `/cost-calculation/supurgelik?productCode=${encodeURIComponent(productCode)}`,
+      materialPriceType,
+    ),
   );
 }
 
 /** Frontend hesap yapmaz; bu alanlar API response contract’ıdır. */
 type SupurgelikCostRowContract = {
   productionYield: { netQty: number; productId: null };
-  sheetPrice: { priceType: 'CARD_INSTALLMENT'; amount: string } | null;
+  sheetPrice: { priceType: MaterialPriceType; amount: string } | null;
   mdfUnitCost: string | null;
   extraCostsTotal: string;
   productionCost: string | null;
@@ -337,7 +383,11 @@ export type CitaPublishedPricing = {
   } | null;
   publishedCashPrice: string | null;
   publishedCardPrice: string | null;
+  cardStatusCode?: string | null;
+  cardStatusMessage?: string | null;
   statusCode: CitaPublishedPriceStatusCode;
+  profitRate?: string | null;
+  profitRateSource?: string | null;
 };
 
 export type CitaCostRow = {
@@ -361,9 +411,10 @@ export type CitaCostRow = {
     source: CitaNetSource;
   };
   sheetPrice: {
-    priceType: 'CARD_INSTALLMENT';
+    priceType: MaterialPriceType;
     amount: string;
   } | null;
+  materialPriceType?: MaterialPriceType;
   mdfUnitCost: string | null;
   extraCosts: Array<{
     code: CitaExtraCostCode;
@@ -371,6 +422,8 @@ export type CitaCostRow = {
   }>;
   extraCostsTotal: string | null;
   productionCost: string | null;
+  cuttingBatchCost?: string | null;
+  cuttingUnitCost?: string | null;
   extraCostsAvailable?: boolean;
   missingExtraCosts: CitaExtraCostCode[];
   statusCode: CitaStatusCode;
@@ -380,24 +433,222 @@ export type CitaCostRow = {
 export type CitaCostListResponse = {
   productCode: 'CITA';
   productName: string;
+  materialPriceType?: MaterialPriceType;
   asOf: string;
   verifiedMeasureCount: number;
   rows: CitaCostRow[];
 };
 
-export function fetchCitaCostList(): Promise<CitaCostListResponse> {
-  return apiRequest<CitaCostListResponse>('/cost-calculation/cita/list');
+export function fetchCitaCostList(
+  materialPriceType: MaterialPriceType = DEFAULT_MATERIAL_PRICE_TYPE,
+): Promise<CitaCostListResponse> {
+  return apiRequest<CitaCostListResponse>(
+    withMaterialPriceType('/cost-calculation/cita/list', materialPriceType),
+  );
 }
 
 export function fetchCitaProductionCost(query: {
   thicknessMm: string;
   widthMm: string;
   lengthMm: string;
+  materialPriceType?: MaterialPriceType;
 }): Promise<CitaCostRow> {
   const params = new URLSearchParams({
     thicknessMm: query.thicknessMm,
     widthMm: query.widthMm,
     lengthMm: query.lengthMm,
+    materialPriceType: query.materialPriceType ?? DEFAULT_MATERIAL_PRICE_TYPE,
   });
   return apiRequest<CitaCostRow>(`/cost-calculation/cita?${params.toString()}`);
+}
+
+export type CatalogItemMode = 'NEW_GROUP' | 'NEW_PRODUCT' | 'NEW_SIZE';
+
+export type CatalogItemProductGroup = string;
+
+export type RecipeCalculationMode =
+  | 'PER_PIECE'
+  | 'PER_SHEET_YIELD'
+  | 'PER_METER'
+  | 'PER_SQUARE_METER'
+  | 'FIXED_QUANTITY';
+
+export type GenericRecipeItemPayload = {
+  rawMaterialId: string;
+  calculationMode: RecipeCalculationMode;
+  quantity: string;
+  quantityUnit?: string;
+  wasteRate?: string;
+  productionYieldId?: string;
+  newNetQty?: number;
+  pieceWidthMm?: number;
+  pieceLengthMm?: number;
+  sortOrder?: number;
+};
+
+export type GenericExtraCostPayload = {
+  typeCode: string;
+  amount: string;
+  calculationMode: 'FIXED' | 'PER_PRODUCT_QUANTITY' | 'PER_RECIPE_QUANTITY';
+  scope: 'GROUP' | 'PRODUCT';
+};
+
+export type CreateCatalogItemPayload = {
+  mode: CatalogItemMode;
+  productGroupCode?: string;
+  newGroupCode?: string;
+  newGroupName?: string;
+  productCode?: string;
+  newProductCode?: string;
+  productName?: string;
+  productUnit?: 'ADET' | 'BOY' | 'METRE' | 'M2';
+  hasSizes?: boolean;
+  isActive?: boolean;
+  widthMm: number;
+  lengthMm: number;
+  displayName?: string;
+  rawMaterialId?: string;
+  netQty?: number;
+  secondaryRawMaterialId?: string;
+  secondaryNetQty?: number;
+  kilcikRawMaterialId?: string;
+  kilcikNetQty?: number;
+  kilcikTypeId?: string;
+  useGroupExtraCostDefaults?: boolean;
+  recipeItems?: GenericRecipeItemPayload[];
+  extraCosts?: GenericExtraCostPayload[];
+  copyRecipeFromSizeId?: string;
+  materialPriceType?: MaterialPriceType;
+  reason?: string;
+};
+
+export type CreateCatalogItemResponse = {
+  mode: CatalogItemMode;
+  productGroupCode: string;
+  productGroupName?: string;
+  productCode: string;
+  productName: string;
+  calculatorType?: string;
+  size: {
+    id: string;
+    widthMm: number;
+    lengthMm: number;
+    displayName: string;
+    thicknessMm?: number;
+  };
+  yields?: Array<{ role: string; id: string; netQty: number }>;
+  recipeId?: string;
+  recipeIds?: string[];
+  message: string;
+};
+
+export function createCatalogItem(
+  payload: CreateCatalogItemPayload,
+): Promise<CreateCatalogItemResponse> {
+  return apiRequest<CreateCatalogItemResponse>('/cost-calculation/catalog-items', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export type DeactivateCatalogTarget = 'SIZE' | 'PRODUCT' | 'GROUP';
+
+export type DeactivateCatalogItemPayload = {
+  target: DeactivateCatalogTarget;
+  recipeId?: string;
+  productId?: string;
+  productGroupCode?: string;
+  reason?: string;
+};
+
+export type DeactivateCatalogItemResponse = {
+  target: DeactivateCatalogTarget;
+  changed: boolean;
+  message: string;
+  recipeId?: string;
+  productId?: string;
+  sizeId?: string;
+  productGroupCode?: string;
+};
+
+export function deactivateCatalogItem(
+  payload: DeactivateCatalogItemPayload,
+): Promise<DeactivateCatalogItemResponse> {
+  return apiRequest<DeactivateCatalogItemResponse>(
+    '/cost-calculation/catalog-items/deactivate',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export type GenericCostRow = {
+  status: 'OK' | 'MISSING_SOURCE';
+  productCode: string;
+  productName: string;
+  productId?: string;
+  sizeId?: string;
+  recipeId?: string;
+  widthMm: number;
+  lengthMm: number;
+  displayName: string;
+  materialCosts: Array<{
+    rawMaterialName: string;
+    netQty: number | null;
+    lineCost: string;
+  }>;
+  materialCostTotal: string | null;
+  extraCostTotal: string | null;
+  productionCost: string | null;
+  missingSources: string[];
+  pricing: {
+    cashSalePrice: string | null;
+    cardSalePrice: string | null;
+    cardStatusMessage?: string | null;
+    profitRate?: string | null;
+  } | null;
+};
+
+export type GenericCostListResponse = {
+  productGroupCode: string;
+  productGroupName: string;
+  calculatorType: string;
+  materialPriceType: MaterialPriceType;
+  rows: GenericCostRow[];
+};
+
+export function fetchGenericCostList(
+  productGroupCode: string,
+  materialPriceType: MaterialPriceType = DEFAULT_MATERIAL_PRICE_TYPE,
+): Promise<GenericCostListResponse> {
+  return apiRequest<GenericCostListResponse>(
+    withMaterialPriceType(
+      `/cost-calculation/generic?productGroupCode=${encodeURIComponent(productGroupCode)}`,
+      materialPriceType,
+    ),
+  );
+}
+
+export type GenericPreviewPayload = {
+  productGroupCode?: string;
+  productGroupName?: string;
+  productCode?: string;
+  productName?: string;
+  productUnit?: 'ADET' | 'BOY' | 'METRE' | 'M2';
+  widthMm: number;
+  lengthMm: number;
+  displayName?: string;
+  materialPriceType?: MaterialPriceType;
+  recipeItems: GenericRecipeItemPayload[];
+  extraCosts?: GenericExtraCostPayload[];
+};
+
+export function previewGenericCatalog(
+  payload: GenericPreviewPayload,
+): Promise<GenericCostRow & { warnings?: string[] }> {
+  return apiRequest('/cost-calculation/generic-preview', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }

@@ -12,6 +12,7 @@ import {
 import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
 import { ListRawMaterialsQueryDto } from './dto/list-raw-materials-query.dto';
 import { UpdateCardInstallmentPriceDto } from './dto/update-card-installment-price.dto';
+import { UpdateCashPriceDto } from './dto/update-cash-price.dto';
 import { UpdateRawMaterialDto } from './dto/update-raw-material.dto';
 import { UpdateRawMaterialPricesDto } from './dto/update-raw-material-prices.dto';
 import { RawMaterialsService } from './raw-materials.service';
@@ -47,6 +48,15 @@ export class RawMaterialsController {
     @Body() dto: UpdateRawMaterialPricesDto,
   ) {
     return this.rawMaterialsService.updatePrices(id, dto);
+  }
+
+  /** Yalnız CASH için tarihçeli fiyat dönemi oluşturur. Diğer tür korunur. */
+  @Post(':id/prices/cash')
+  updateCashPrice(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCashPriceDto,
+  ) {
+    return this.rawMaterialsService.updateCashPrice(id, dto);
   }
 
   /** Yalnız CARD_INSTALLMENT için tarihçeli fiyat dönemi oluşturur. */

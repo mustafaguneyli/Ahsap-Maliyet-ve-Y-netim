@@ -145,6 +145,7 @@ describe('Süpürgelik PP Sarma request-time DB regression', () => {
 
         const ppList = await service.getSupurgelikMdfCosts({
           productCode: 'DUZ_PP_SARMA_SUPURGELIK',
+          materialPriceType: 'CASH',
         });
         const nineMm = ppList.rows.filter((row) => row.thicknessMm === 9);
         expect(nineMm.length).toBeGreaterThan(0);

@@ -1,7 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { MaterialPriceType, PricingModifierType } from '@prisma/client';
-import { CalculationEngine } from '../../calculation-engine/calculation-engine';
 import { toDecimal } from '../../common/decimal/decimal.util';
+import { CalculationEngine } from '../../calculation-engine/calculation-engine';
+import { applyPercentCardSale } from '../../calculation-engine/pricing/percent-card-sale';
 import type {
   AyarliPervazExtraCostsInput,
   AyarliPervazMdfInput,
@@ -25,10 +26,10 @@ import {
 import {
   DoorFrameVariantCode,
   formatDoorFrameSizeLabel,
-  getDoorFrameSizes,
   getPrimaryMaterialCode,
   getSecondary12MaterialCode,
 } from '../../calculation-engine/calculators/door-frame-variants';
+import { resolveDoorFrameSizesWithCatalog } from './catalog-items.service';
 import { ExtraCostListResponse, ExtraCostsService } from '../extra-costs/extra-costs.service';
 import { SUPURGELIK_EXTRA_COST_TYPE_ORDER } from '../extra-costs/supurgelik-extra-cost-seed';
 import { AYARLI_PERVAZ_KILCIK_MATERIAL_CODE } from '../pervaz/ayarli-pervaz-kilcik-yield-seed';
@@ -37,8 +38,14 @@ import {
   resolveAyarliPervazCardSaleEnabled,
   resolveAyarliPervazProfitRate,
   resolveDekoratifPervazPremiumRate,
-  resolvePervazCardFixedSurchargeAmount,
 } from '../pricing/ayarli-pervaz-profit-rate.resolver';
+import {
+  findProductSizeId,
+  loadProfitRateCatalog,
+  resolveCatalogProfitRate,
+  type ProfitRateCatalog,
+} from '../pricing/profit-rate-catalog';
+import { resolveCardMarkupRateWithProductFallback, resolveGroupCardMarkupRate } from '../pricing/card-markup-rate.resolver';
 import { PervazQtyService } from '../pervaz/pervaz-qty.service';
 import {
   applyPublishedSalePrices,
@@ -46,6 +53,8 @@ import {
 } from '../price-overrides/apply-published-sale-prices';
 import { PrismaService } from '../../prisma/prisma.service';
 import { selectCurrentMaterialPrice } from './current-material-price';
+import { resolveCitaMaterialPriceType } from './cita-mdf.service';
+import type { CitaMaterialPriceType } from '../../calculation-engine/calculators/cita-mdf-calculator';
 import {
   SUPURGELIK_DECORATIVE_RATE_MISSING,
   SupurgelikRawMaterialPriceMissingException,
@@ -62,7 +71,9 @@ type SupurgelikExtraCostContext = {
   totalAmount: string;
 };
 
-type SupurgelikDuzPricingContext = SupurgelikDuzPricingInput;
+type SupurgelikDuzPricingContext = SupurgelikDuzPricingInput & {
+  cardMarkupRate: string | null;
+};
 type SupurgelikDecorativeRateContext = Pick<
   SupurgelikDecorativePricingInput,
   'decorativeRate' | 'decorativeRateSource'
@@ -79,12 +90,17 @@ export class CostCalculationService {
     private readonly pervazQtyService: PervazQtyService,
   ) {}
 
-  async getDoorFrameMdfCosts(variant: DoorFrameVariantCode, now: Date = new Date()) {
+  async getDoorFrameMdfCosts(
+    variant: DoorFrameVariantCode,
+    now: Date = new Date(),
+    materialPriceTypeInput?: string | null,
+  ) {
+    const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     if (variant !== '34_MM' && variant !== '30_MM') {
       throw new BadRequestException('variant 34_MM veya 30_MM olmalıdır.');
     }
 
-    const sizes = getDoorFrameSizes(variant);
+    const sizes = await resolveDoorFrameSizesWithCatalog(this.prisma, variant);
     const primaryCode = getPrimaryMaterialCode(variant);
     const secondaryCodes = [
       ...new Set(sizes.map((s) => getSecondary12MaterialCode(s.widthCm, s.lengthCm))),
@@ -97,7 +113,7 @@ export class CostCalculationService {
       include: {
         prices: {
           where: {
-            priceType: MaterialPriceType.CARD_INSTALLMENT,
+            priceType: materialPriceType as MaterialPriceType,
             isActive: true,
           },
           orderBy: { effectiveFrom: 'desc' },
@@ -115,12 +131,12 @@ export class CostCalculationService {
       const material = materialByCode.get(code)!;
       const current = selectCurrentMaterialPrice(
         material.prices,
-        MaterialPriceType.CARD_INSTALLMENT,
+        materialPriceType as MaterialPriceType,
         now,
       );
       if (!current) {
         throw new NotFoundException(
-          `${code} için şu an geçerli CARD_INSTALLMENT (K.Kartı) alış fiyatı bulunamadı.`,
+          `${code} için şu an geçerli ${materialPriceType} alış fiyatı bulunamadı.`,
         );
       }
       currentPriceByCode.set(code, current.price.toString());
@@ -180,27 +196,72 @@ export class CostCalculationService {
     const extraCosts = this.requireDoorFrameExtraCosts(
       await this.extraCostsService.listForProductGroup('door_frame', now),
     );
-    const { productId, vatRate, profitRate, cardMarkupRate } =
+    const { productId, productGroupId, vatRate, profitRate, cardMarkupRate } =
       await this.requireProductPricingRates(variant);
-    const rows = this.engine.calculateDoorFrameCostsWithProfit(
-      sizeInputs,
-      extraCosts,
-      vatRate,
-      profitRate,
-      cardMarkupRate,
+    const profitCatalog = await loadProfitRateCatalog(
+      this.prisma,
+      productId,
+      productGroupId,
     );
+    const productSizes = await this.prisma.productSize.findMany({
+      where: {
+        OR: sizeInputs.map((size) => ({
+          widthMm: size.widthCm * 10,
+          lengthMm: size.lengthCm * 10,
+        })),
+      },
+    });
+    const sizeIdByMm = new Map(
+      productSizes.map((size) => [`${size.widthMm}x${size.lengthMm}`, size.id]),
+    );
+
+    const rows = sizeInputs.flatMap((sizeInput) => {
+      const productSizeId =
+        sizeIdByMm.get(`${sizeInput.widthCm * 10}x${sizeInput.lengthCm * 10}`) ??
+        null;
+      const resolved = resolveCatalogProfitRate({
+        catalog: profitCatalog,
+        now,
+        productCode: variant,
+        productSizeId,
+        required: true,
+      });
+      if (resolved.profitRate == null) {
+        throw new NotFoundException(
+          `${variant} için şu an geçerli profitRate bulunamadı.`,
+        );
+      }
+      const calculated = this.engine.calculateDoorFrameCostsWithProfit(
+        [sizeInput],
+        extraCosts,
+        vatRate,
+        resolved.profitRate,
+        cardMarkupRate,
+      );
+      return calculated.map((row) => ({
+        ...row,
+        productId,
+        productSizeId,
+        pricing: {
+          ...row.pricing,
+          profitRateSource: resolved.source,
+        },
+      }));
+    });
     const overrideBySize = await this.loadActiveCashOverrides(productId, sizes);
 
     return {
       productGroupCode: 'door_frame',
       productGroupName: 'Kapı Kasası',
       variant,
-      priceType: MaterialPriceType.CARD_INSTALLMENT,
+      priceType: materialPriceType as MaterialPriceType,
+      materialPriceType,
       asOf: now.toISOString(),
       extraCosts,
       vatRate,
       profitRate,
       cardMarkupRate,
+      productId,
       rows: rows.map((row) => {
         const key = `${row.widthCm}x${row.lengthCm}`;
         const published = applyPublishedSalePrices(
@@ -229,13 +290,16 @@ export class CostCalculationService {
       thicknessMm: number;
       widthMm: number;
       lengthMm: number;
+      materialPriceType?: string | null;
     },
     now: Date = new Date(),
     prefetchedExtraCosts?: SupurgelikExtraCostContext,
     prefetchedPricing?: SupurgelikDuzPricingContext,
     prefetchedDecorativeRates?: SupurgelikDecorativeRateMap,
     prefetchedPpWrappingCost?: string | null,
+    prefetchedProfitCatalog?: ProfitRateCatalog,
   ) {
+    const materialPriceType = resolveCitaMaterialPriceType(input.materialPriceType);
     if (!SUPURGELIK_PRODUCT_CODES.includes(input.productCode)) {
       throw new BadRequestException('Geçersiz Süpürgelik productCode.');
     }
@@ -282,7 +346,7 @@ export class CostCalculationService {
           include: {
             prices: {
               where: {
-                priceType: MaterialPriceType.CARD_INSTALLMENT,
+                priceType: materialPriceType as MaterialPriceType,
                 isActive: true,
               },
               orderBy: { effectiveFrom: 'desc' },
@@ -308,25 +372,58 @@ export class CostCalculationService {
     const material = master.rawMaterial;
     const currentPrice = selectCurrentMaterialPrice(
       material.prices,
-      MaterialPriceType.CARD_INSTALLMENT,
+      materialPriceType as MaterialPriceType,
       now,
     );
     if (!currentPrice) {
-      throw new SupurgelikRawMaterialPriceMissingException(material.code);
+      throw new SupurgelikRawMaterialPriceMissingException(
+        material.code,
+        materialPriceType,
+      );
     }
 
     const commonExtraCosts =
       prefetchedExtraCosts ?? (await this.resolveSupurgelikExtraCosts(now));
     const basePricing =
       prefetchedPricing ?? (await this.resolveSupurgelikDuzPricing(group.id));
+    const productSizeId = await findProductSizeId(
+      this.prisma,
+      input.widthMm,
+      input.lengthMm,
+    );
+    const profitCatalog =
+      prefetchedProfitCatalog ??
+      (await loadProfitRateCatalog(this.prisma, product.id, group.id));
+    const resolvedProfit = resolveCatalogProfitRate({
+      catalog: profitCatalog,
+      now,
+      productCode: input.productCode,
+      productSizeId,
+      required: true,
+    });
+    if (resolvedProfit.profitRate == null || resolvedProfit.source == null) {
+      throw new NotFoundException(
+        'SUPURGELIK için aktif profitRate bulunamadı.',
+      );
+    }
     const decorativeRates = isSupurgelikDecorativeProduct(input.productCode)
       ? prefetchedDecorativeRates ??
         (await this.resolveSupurgelikDecorativeRates(group.id, now))
       : undefined;
+    const { cardMarkupRate, ...baseWithoutCard } = basePricing;
     const decorativeRate = decorativeRates?.get(input.thicknessMm) ?? null;
     const pricing = isSupurgelikDecorativeProduct(input.productCode)
-      ? { ...basePricing, ...(decorativeRate ?? this.missingDecorativeRate()) }
-      : basePricing;
+      ? {
+          ...baseWithoutCard,
+          profitRate: resolvedProfit.profitRate,
+          source: resolvedProfit.source,
+          ...(decorativeRate ?? this.missingDecorativeRate()),
+        }
+      : {
+          ...baseWithoutCard,
+          profitRate: resolvedProfit.profitRate,
+          source: resolvedProfit.source,
+        };
     const ppWrappingCost = isSupurgelikPpProduct(input.productCode)
       ? prefetchedPpWrappingCost !== undefined
         ? prefetchedPpWrappingCost
@@ -345,7 +442,7 @@ export class CostCalculationService {
         sheetLengthMm: material.sheetLengthMm,
       },
       sheetPrice: {
-        priceType: 'CARD_INSTALLMENT',
+        priceType: materialPriceType,
         amount: currentPrice.price.toString(),
       },
       productionYield: {
@@ -357,12 +454,17 @@ export class CostCalculationService {
       pricing,
     };
 
+    const calculated = this.engine.calculateSupurgelikMdf(calculatorInput);
     return {
       productGroupCode: 'SUPURGELIK',
       productGroupName: group.name,
       productName: product.name,
+      materialPriceType,
       asOf: now.toISOString(),
-      ...this.engine.calculateSupurgelikMdf(calculatorInput),
+      ...calculated,
+      pricing: calculated.pricing
+        ? attachPercentPublishedCard(calculated.pricing, cardMarkupRate)
+        : calculated.pricing,
     };
   }
 
@@ -371,9 +473,13 @@ export class CostCalculationService {
    * calculator/service yolunu her satır için reuse eder.
    */
   async getSupurgelikMdfCosts(
-    input: { productCode: SupurgelikProductCode },
+    input: {
+      productCode: SupurgelikProductCode;
+      materialPriceType?: string | null;
+    },
     now: Date = new Date(),
   ) {
+    const materialPriceType = resolveCitaMaterialPriceType(input.materialPriceType);
     if (!SUPURGELIK_PRODUCT_CODES.includes(input.productCode)) {
       throw new BadRequestException('Geçersiz Süpürgelik productCode.');
     }
@@ -404,6 +510,11 @@ export class CostCalculationService {
     const ppWrappingCost = isSupurgelikPpProduct(input.productCode)
       ? await this.resolveSupurgelikPpWrappingCost(now)
       : undefined;
+    const profitCatalog = await loadProfitRateCatalog(
+      this.prisma,
+      product.id,
+      group.id,
+    );
 
     const productSizes = await this.prisma.productSize.findMany({
       select: { widthMm: true, lengthMm: true },
@@ -464,12 +575,14 @@ export class CostCalculationService {
             thicknessMm,
             widthMm: master.pieceWidthMm,
             lengthMm: master.pieceLengthMm,
+            materialPriceType,
           },
           now,
           commonExtraCosts,
           pricing,
           decorativeRates,
           ppWrappingCost,
+          profitCatalog,
         );
         const pricingStatusCode =
           calculated.pricing != null && 'statusCode' in calculated.pricing
@@ -536,6 +649,7 @@ export class CostCalculationService {
           ),
           errorCode: error.errorCode,
           errorMessage: error.message,
+          materialPriceType: error.materialPriceType,
         });
       }
     }
@@ -545,6 +659,7 @@ export class CostCalculationService {
       productGroupName: group.name,
       productCode: input.productCode,
       productName: product.name,
+      materialPriceType,
       asOf: now.toISOString(),
       masterCount: masters.length,
       rowCount: rows.length,
@@ -554,7 +669,7 @@ export class CostCalculationService {
 
   /**
    * Ayarlı Pervaz — MDF + PERVAZ ek maliyet + kâr + ROUNDUP + satır adjustment.
-   * Kart: yalnız cardSaleEnabled === true satırlarda publishedCash + cardFixedSurchargeAmount.
+   * Kart: yalnız cardSaleEnabled === true satırlarda publishedCash × group cardMarkupRate.
    * KDV / mutlak PriceOverride yok. Her istekte yeniden hesaplanır.
    */
   async getAyarliPervazMdfCost(
@@ -566,7 +681,9 @@ export class CostCalculationService {
       rawMaterialCode?: string;
     },
     now: Date = new Date(),
+    materialPriceTypeInput?: string | null,
   ) {
+    const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     if (input.productCode !== 'AYARLI_PERVAZ') {
       throw new BadRequestException(
         'Bu aşamada Pervaz MDF maliyeti yalnız AYARLI_PERVAZ için hesaplanır.',
@@ -608,7 +725,11 @@ export class CostCalculationService {
       pieceWidthMm: input.widthMm,
       pieceLengthMm: input.lengthMm,
     });
-    const mainSheetPrice = this.requireCardSheetPrice(mainMaterial, now);
+    const mainSheetPrice = this.requireSheetPrice(
+      mainMaterial,
+      now,
+      materialPriceType,
+    );
 
     const kilcikMaterial = await this.prisma.rawMaterial.findUnique({
       where: { code: AYARLI_PERVAZ_KILCIK_MATERIAL_CODE },
@@ -626,7 +747,11 @@ export class CostCalculationService {
       sheetWidthMm: kilcikMaterial.sheetWidthMm,
       sheetLengthMm: kilcikMaterial.sheetLengthMm,
     });
-    const kilcikSheetPrice = this.requireCardSheetPrice(kilcikMaterial, now);
+    const kilcikSheetPrice = this.requireSheetPrice(
+      kilcikMaterial,
+      now,
+      materialPriceType,
+    );
 
     const extraCosts = this.requirePervazExtraCosts(
       await this.extraCostsService.listForProductGroup('PERVAZ', now),
@@ -662,9 +787,26 @@ export class CostCalculationService {
         isActive: true,
       },
     });
+    const productSizeId = await findProductSizeId(
+      this.prisma,
+      input.widthMm,
+      input.lengthMm,
+    );
+    const profitCatalog = await loadProfitRateCatalog(
+      this.prisma,
+      product.id,
+      group.id,
+    );
 
     const resolvedProfit = resolveAyarliPervazProfitRate({
       now,
+      productCode: 'AYARLI_PERVAZ',
+      sizeOverrides: productSizeId
+        ? profitCatalog.sizeOverrides.filter(
+            (row) => row.productSizeId === productSizeId,
+          )
+        : [],
+      productOverrides: profitCatalog.productOverrides,
       rowExceptions,
       productSettings,
       groupSettings,
@@ -674,8 +816,7 @@ export class CostCalculationService {
       now,
       rowExceptions,
     });
-    const cardFixedSurchargeAmount =
-      resolvePervazCardFixedSurchargeAmount(productSettings);
+    const cardMarkupRate = resolveGroupCardMarkupRate(groupSettings);
     const cardSaleEnabled = resolveAyarliPervazCardSaleEnabled({
       now,
       rowExceptions,
@@ -688,14 +829,14 @@ export class CostCalculationService {
       lengthMm: input.lengthMm,
       mainPiece: {
         rawMaterialCode: mainMaterial.code,
-        sheetPriceType: 'CARD_INSTALLMENT',
+        sheetPriceType: materialPriceType,
         sheetPrice: mainSheetPrice,
         netQty: mainQty.netQty,
         yieldSource: mainQty.source,
       },
       kilcik: {
         rawMaterialCode: kilcikMaterial.code,
-        sheetPriceType: 'CARD_INSTALLMENT',
+        sheetPriceType: materialPriceType,
         sheetPrice: kilcikSheetPrice,
         netQty: kilcikQty.netQty,
         yieldSource: kilcikQty.source,
@@ -703,7 +844,7 @@ export class CostCalculationService {
       extraCosts,
       profitRate: resolvedProfit.profitRate,
       adjustmentAmount: resolvedAdjustment.adjustmentAmount,
-      cardFixedSurchargeAmount,
+      cardMarkupRate,
       cardSaleEnabled,
     };
 
@@ -712,7 +853,8 @@ export class CostCalculationService {
     return {
       productGroupCode: 'PERVAZ',
       productGroupName: group.name,
-      priceType: MaterialPriceType.CARD_INSTALLMENT,
+      priceType: materialPriceType as MaterialPriceType,
+      materialPriceType,
       asOf: now.toISOString(),
       ...result,
       pricing: {
@@ -728,7 +870,11 @@ export class CostCalculationService {
    * Liste ilgili ürüne ait aktif ProductionYield kayıtlarını DB'den keşfeder;
    * teorik fallback ölçüleri master yapılmadan tabloya girmez.
    */
-  async getAyarliPervazMdfCosts(now: Date = new Date()) {
+  async getAyarliPervazMdfCosts(
+    now: Date = new Date(),
+    materialPriceTypeInput?: string | null,
+  ) {
+    const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     const { rows: contexts } = await discoverActiveProductMasterRows(
       this.prisma,
       { productGroupCode: 'PERVAZ', productCode: 'AYARLI_PERVAZ' },
@@ -746,6 +892,7 @@ export class CostCalculationService {
             rawMaterialCode: row.materialCode,
           },
           now,
+          materialPriceType,
         ),
       );
     }
@@ -753,6 +900,7 @@ export class CostCalculationService {
     return {
       productCode: 'AYARLI_PERVAZ',
       productName: 'Ayarlı Pervaz',
+      materialPriceType,
       asOf: now.toISOString(),
       verifiedMeasureCount: rows.length,
       rows,
@@ -763,7 +911,11 @@ export class CostCalculationService {
    * Dekoratif Pervaz — product-scoped aktif Excel master satırları DB'den keşfedilir.
    * Hesaplar her istekte güncel MDF, PERVAZ masraf ve product kâr ayarını kullanır.
    */
-  async getDekoratifPervazCosts(now: Date = new Date()) {
+  async getDekoratifPervazCosts(
+    now: Date = new Date(),
+    materialPriceTypeInput?: string | null,
+  ) {
+    const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     const { rows: contexts } = await discoverActiveProductMasterRows(
       this.prisma,
       { productGroupCode: 'PERVAZ', productCode: 'DEKORATIF_PERVAZ' },
@@ -776,6 +928,7 @@ export class CostCalculationService {
           'DEKORATIF_PERVAZ',
           this.toDekoratifPervazContext(context),
           now,
+          materialPriceType,
         ),
       );
     }
@@ -783,6 +936,7 @@ export class CostCalculationService {
     return {
       productCode: 'DEKORATIF_PERVAZ',
       productName: 'Dekoratif Pervaz',
+      materialPriceType,
       asOf: now.toISOString(),
       verifiedMeasureCount: rows.length,
       rows,
@@ -790,7 +944,11 @@ export class CostCalculationService {
   }
 
   /** Dekoratif Pervaz Geniş Kılçık — yalnız Excel AC96–AC97 master satırları. */
-  async getDekoratifGenisKilcikCosts(now: Date = new Date()) {
+  async getDekoratifGenisKilcikCosts(
+    now: Date = new Date(),
+    materialPriceTypeInput?: string | null,
+  ) {
+    const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     const { product, rows: contexts } = await discoverActiveProductMasterRows(
       this.prisma,
       {
@@ -805,12 +963,14 @@ export class CostCalculationService {
           'DEKORATIF_PERVAZ_GENIS_KILCIK',
           this.toDekoratifPervazContext(context),
           now,
+          materialPriceType,
         ),
       );
     }
     return {
       productCode: 'DEKORATIF_PERVAZ_GENIS_KILCIK',
       productName: product.name,
+      materialPriceType,
       asOf: now.toISOString(),
       verifiedMeasureCount: rows.length,
       rows,
@@ -826,7 +986,9 @@ export class CostCalculationService {
       pieceLengthMm: number;
     },
     now: Date,
+    materialPriceTypeInput?: string | null,
   ) {
+    const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     const group = await this.prisma.productGroup.findUnique({
       where: { code: 'PERVAZ' },
     });
@@ -912,9 +1074,25 @@ export class CostCalculationService {
         isActive: true,
       },
     });
+    const productSizeId = await findProductSizeId(
+      this.prisma,
+      context.pieceWidthMm,
+      context.pieceLengthMm,
+    );
+    const profitCatalog = await loadProfitRateCatalog(
+      this.prisma,
+      product.id,
+      group.id,
+    );
     const resolvedProfit = resolveAyarliPervazProfitRate({
       now,
       productCode,
+      sizeOverrides: productSizeId
+        ? profitCatalog.sizeOverrides.filter(
+            (row) => row.productSizeId === productSizeId,
+          )
+        : [],
+      productOverrides: profitCatalog.productOverrides,
       rowExceptions,
       productSettings,
       groupSettings,
@@ -924,8 +1102,7 @@ export class CostCalculationService {
       now,
       rowExceptions,
     });
-    const cardFixedSurchargeAmount =
-      resolvePervazCardFixedSurchargeAmount(productSettings);
+    const cardMarkupRate = resolveGroupCardMarkupRate(groupSettings);
     const result = this.engine.calculateDekoratifPervaz({
       productCode,
       thicknessMm: context.thicknessMm,
@@ -933,28 +1110,29 @@ export class CostCalculationService {
       lengthMm: context.pieceLengthMm,
       mainPiece: {
         rawMaterialCode: mainMaterial.code,
-        sheetPriceType: 'CARD_INSTALLMENT',
-        sheetPrice: this.requireCardSheetPrice(mainMaterial, now),
+        sheetPriceType: materialPriceType,
+        sheetPrice: this.requireSheetPrice(mainMaterial, now, materialPriceType),
         netQty: mainQty.netQty,
         yieldSource: mainQty.source,
       },
       kilcik: {
         rawMaterialCode: kilcikMaterial.code,
-        sheetPriceType: 'CARD_INSTALLMENT',
-        sheetPrice: this.requireCardSheetPrice(kilcikMaterial, now),
+        sheetPriceType: materialPriceType,
+        sheetPrice: this.requireSheetPrice(kilcikMaterial, now, materialPriceType),
         netQty: kilcikQty.netQty,
         yieldSource: kilcikQty.source,
       },
       extraCosts,
       profitRate: resolvedProfit.profitRate,
       decorativePremiumRate,
-      cardFixedSurchargeAmount,
+      cardMarkupRate,
     });
 
     return {
       productGroupCode: 'PERVAZ',
       productGroupName: group.name,
-      priceType: MaterialPriceType.CARD_INSTALLMENT,
+      priceType: materialPriceType as MaterialPriceType,
+      materialPriceType,
       asOf: now.toISOString(),
       ...result,
       pricing: {
@@ -1051,21 +1229,22 @@ export class CostCalculationService {
     return candidates[0];
   }
 
-  private requireCardSheetPrice(
+  private requireSheetPrice(
     material: {
       code: string;
       prices: Parameters<typeof selectCurrentMaterialPrice>[0];
     },
     now: Date,
+    materialPriceType: CitaMaterialPriceType,
   ): string {
     const current = selectCurrentMaterialPrice(
       material.prices,
-      MaterialPriceType.CARD_INSTALLMENT,
+      materialPriceType as MaterialPriceType,
       now,
     );
     if (!current) {
       throw new NotFoundException(
-        `${material.code} için şu an geçerli CARD_INSTALLMENT (K.Kartı) alış fiyatı bulunamadı.`,
+        `${material.code} için şu an geçerli ${materialPriceType} alış fiyatı bulunamadı.`,
       );
     }
     return current.price.toString();
@@ -1114,9 +1293,10 @@ export class CostCalculationService {
 
   private async requireProductPricingRates(variant: DoorFrameVariantCode): Promise<{
     productId: string;
+    productGroupId: string;
     vatRate: string;
     profitRate: string;
-    cardMarkupRate: string;
+    cardMarkupRate: string | null;
   }> {
     const group = await this.prisma.productGroup.findUnique({
       where: { code: 'door_frame' },
@@ -1155,17 +1335,23 @@ export class CostCalculationService {
     if (setting.profitRate == null) {
       throw new NotFoundException(`${variant} için kâr oranı (profitRate) tanımlı değil.`);
     }
-    if (setting.cardMarkupRate == null) {
-      throw new NotFoundException(
-        `${variant} için kredi kartı farkı (cardMarkupRate) tanımlı değil.`,
-      );
-    }
+
+    const groupSettings = await this.prisma.pricingSetting.findMany({
+      where: {
+        productGroupId: group.id,
+        productId: null,
+        isActive: true,
+      },
+    });
 
     return {
       productId: product.id,
+      productGroupId: group.id,
       vatRate: setting.vatRate.toString(),
       profitRate: setting.profitRate.toString(),
-      cardMarkupRate: setting.cardMarkupRate.toString(),
+      cardMarkupRate: resolveCardMarkupRateWithProductFallback(groupSettings, [
+        setting,
+      ]),
     };
   }
 
@@ -1259,6 +1445,7 @@ export class CostCalculationService {
     return {
       profitRate: profitRate.toFixed(),
       source: 'GROUP_PRICING_SETTING',
+      cardMarkupRate: setting.cardMarkupRate?.toString() ?? null,
     };
   }
 
@@ -1352,3 +1539,39 @@ export class CostCalculationService {
     };
   }
 }
+
+function attachPercentPublishedCard<
+  T extends { publishedCashPrice?: string | null },
+>(
+  pricing: T,
+  cardMarkupRate: string | null,
+): T & {
+  publishedCardPrice: string | null;
+  cardMarkupRate: string | null;
+  cardStatusCode: string | null;
+  cardStatusMessage: string | null;
+} {
+  const cash = pricing.publishedCashPrice;
+  if (cash == null || cash === '') {
+    return {
+      ...pricing,
+      publishedCardPrice: null,
+      cardMarkupRate,
+      cardStatusCode: null,
+      cardStatusMessage: null,
+    };
+  }
+  const card = applyPercentCardSale({
+    cashPrice: cash,
+    cardMarkupRate,
+    rounding: 'roundUpWholeTl',
+  });
+  return {
+    ...pricing,
+    publishedCardPrice: card.cardSalePrice,
+    cardMarkupRate: card.cardMarkupRate,
+    cardStatusCode: card.statusCode,
+    cardStatusMessage: card.statusMessage,
+  };
+}
+

@@ -7,6 +7,7 @@ import {
   attachCitaClassifiedPricing,
   loadCitaPublishedPriceBandViews,
 } from './cita-list-pricing';
+import { loadCardMarkupRate } from '../pricing/card-markup-rate.resolver';
 import type { CitaNetQueryDto } from './dto/cita-net-query.dto';
 
 @Injectable()
@@ -44,6 +45,7 @@ export class CitaProductionService {
       throw new Error('CITA published pricing için PrismaService gerekir.');
     }
     const bands = await loadCitaPublishedPriceBandViews(this.prisma, now);
-    return attachCitaClassifiedPricing(cost, bands);
+    const cardMarkupRate = await loadCardMarkupRate(this.prisma, 'CITA');
+    return attachCitaClassifiedPricing(cost, bands, cardMarkupRate);
   }
 }

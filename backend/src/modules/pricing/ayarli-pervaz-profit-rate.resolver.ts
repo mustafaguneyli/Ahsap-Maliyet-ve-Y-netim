@@ -1,11 +1,15 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { toDecimal } from '../../common/decimal/decimal.util';
 
-export type AyarliPervazProfitRateSource =
+export type ProfitRateSource =
+  | 'SIZE_OVERRIDE'
+  | 'PRODUCT_OVERRIDE'
   | 'ROW_EXCEPTION'
   | 'PRODUCT_PRICING_SETTING'
   | 'GROUP_PRICING_SETTING'
   | 'GLOBAL_PRICING_SETTING';
+
+export type AyarliPervazProfitRateSource = ProfitRateSource;
 
 export type EffectivePeriodRecord = {
   isActive: boolean;
@@ -18,10 +22,12 @@ export type ProfitRateHolder = {
   profitRate: { toString(): string } | string | null;
 };
 
-export type AyarliPervazProfitRateResolution = {
+export type ProfitRateResolution = {
   profitRate: string;
-  source: AyarliPervazProfitRateSource;
+  source: ProfitRateSource;
 };
+
+export type AyarliPervazProfitRateResolution = ProfitRateResolution;
 
 export type AyarliPervazAdjustmentSource = 'ROW_EXCEPTION' | 'NONE';
 
@@ -83,26 +89,48 @@ function firstActiveProfitRate(settings: ProfitRateHolder[]): string | null {
 }
 
 /**
- * AYARLI_PERVAZ profitRate:
- * ROW_EXCEPTION (profitRate NOT NULL) >
+ * Kâr oranı:
+ * SIZE_OVERRIDE (product+size) >
+ * PRODUCT_OVERRIDE (product, size yok) >
+ * ROW_EXCEPTION (Pervaz Excel satır) >
  * PRODUCT_PRICING_SETTING >
  * GROUP_PRICING_SETTING >
  * GLOBAL_PRICING_SETTING
  *
- * Exception kaydı olup profitRate NULL ise (yalnız adjustment) default kâr kesilmez.
- * Sessiz %15 yok.
- *
- * PricingSetting modelinde effectiveFrom/To yoktur; aktif dönem isActive ile tutulur.
+ * Exception kaydı olup profitRate NULL ise default kâr kesilmez.
+ * Sessiz %15 yok. 0 geçerli; boş/null fallback'e düşer.
  */
-export function resolveAyarliPervazProfitRate(input: {
+export function resolveProfitRate(input: {
   now: Date;
   productCode?: string;
-  rowExceptions: Array<EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }>;
-  productSettings: ProfitRateHolder[];
+  sizeOverrides?: Array<
+    EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }
+  >;
+  productOverrides?: Array<
+    EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }
+  >;
+  rowExceptions?: Array<
+    EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }
+  >;
+  productSettings?: ProfitRateHolder[];
   groupSettings?: ProfitRateHolder[];
   globalSettings?: ProfitRateHolder[];
-}): AyarliPervazProfitRateResolution {
-  const currentException = selectCurrentEffectivePeriod(input.rowExceptions, input.now);
+  required?: boolean;
+}): ProfitRateResolution | { profitRate: null; source: null } {
+  const sizeProfit = readPeriodProfit(input.sizeOverrides, input.now);
+  if (sizeProfit != null) {
+    return { profitRate: sizeProfit, source: 'SIZE_OVERRIDE' };
+  }
+
+  const productOverrideProfit = readPeriodProfit(input.productOverrides, input.now);
+  if (productOverrideProfit != null) {
+    return { profitRate: productOverrideProfit, source: 'PRODUCT_OVERRIDE' };
+  }
+
+  const currentException = selectCurrentEffectivePeriod(
+    input.rowExceptions ?? [],
+    input.now,
+  );
   const rowProfit = currentException
     ? readNonNegativeProfitRate(currentException.profitRate)
     : null;
@@ -110,7 +138,7 @@ export function resolveAyarliPervazProfitRate(input: {
     return { profitRate: rowProfit, source: 'ROW_EXCEPTION' };
   }
 
-  const productProfit = firstActiveProfitRate(input.productSettings);
+  const productProfit = firstActiveProfitRate(input.productSettings ?? []);
   if (productProfit != null) {
     return { profitRate: productProfit, source: 'PRODUCT_PRICING_SETTING' };
   }
@@ -125,9 +153,50 @@ export function resolveAyarliPervazProfitRate(input: {
     return { profitRate: globalProfit, source: 'GLOBAL_PRICING_SETTING' };
   }
 
+  if (input.required === false) {
+    return { profitRate: null, source: null };
+  }
+
   throw new NotFoundException(
-    `${input.productCode ?? 'AYARLI_PERVAZ'} için şu an geçerli profitRate bulunamadı.`,
+    `${input.productCode ?? 'ürün'} için şu an geçerli profitRate bulunamadı.`,
   );
+}
+
+function readPeriodProfit(
+  rows:
+    | Array<EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }>
+    | undefined,
+  now: Date,
+): string | null {
+  if (!rows?.length) return null;
+  const current = selectCurrentEffectivePeriod(rows, now);
+  return current ? readNonNegativeProfitRate(current.profitRate) : null;
+}
+
+/**
+ * AYARLI_PERVAZ / ortak kâr çözümü. required=true.
+ */
+export function resolveAyarliPervazProfitRate(input: {
+  now: Date;
+  productCode?: string;
+  sizeOverrides?: Array<
+    EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }
+  >;
+  productOverrides?: Array<
+    EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }
+  >;
+  rowExceptions: Array<EffectivePeriodRecord & { profitRate: { toString(): string } | string | null }>;
+  productSettings: ProfitRateHolder[];
+  groupSettings?: ProfitRateHolder[];
+  globalSettings?: ProfitRateHolder[];
+}): AyarliPervazProfitRateResolution {
+  const resolved = resolveProfitRate({ ...input, required: true });
+  if (resolved.profitRate == null || resolved.source == null) {
+    throw new NotFoundException(
+      `${input.productCode ?? 'AYARLI_PERVAZ'} için şu an geçerli profitRate bulunamadı.`,
+    );
+  }
+  return { profitRate: resolved.profitRate, source: resolved.source };
 }
 
 export function resolveDekoratifPervazPremiumRate(input: {

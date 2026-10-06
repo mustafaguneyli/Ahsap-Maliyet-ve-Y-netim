@@ -224,6 +224,56 @@ describe('RawMaterialsService', () => {
     expect(auditService.record).not.toHaveBeenCalled();
   });
 
+  it('nakit fiyatı yalnız CASH dönemini günceller', async () => {
+    const { service, tx } = buildService({
+      openPrice: {
+        id: 'open-cash-price',
+        price: { toString: () => '1600.0000' },
+        effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+      },
+    });
+
+    const result = await service.updateCashPrice(
+      createdMaterial.id,
+      { price: '1700' },
+      new Date('2026-09-14T12:00:00.000Z'),
+    );
+
+    expect(result.changed).toBe(true);
+    expect(tx.rawMaterialPrice.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ priceType: 'CASH' }),
+      }),
+    );
+    expect(tx.rawMaterialPrice.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ priceType: 'CASH' }),
+    });
+    expect(tx.rawMaterialPrice.create).not.toHaveBeenCalledWith({
+      data: expect.objectContaining({ priceType: 'CARD_INSTALLMENT' }),
+    });
+  });
+
+  it('aynı nakit Decimal değeri kart kaydını ve history’yi değiştirmez', async () => {
+    const { service, tx, auditService } = buildService({
+      openPrice: {
+        id: 'open-cash-price',
+        price: { toString: () => '1600.0000' },
+        effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+      },
+    });
+
+    const result = await service.updateCashPrice(
+      createdMaterial.id,
+      { price: '1600' },
+      new Date('2026-09-14T12:00:00.000Z'),
+    );
+
+    expect(result.changed).toBe(false);
+    expect(tx.rawMaterialPrice.update).not.toHaveBeenCalled();
+    expect(tx.rawMaterialPrice.create).not.toHaveBeenCalled();
+    expect(auditService.record).not.toHaveBeenCalled();
+  });
+
   it.each(['', 'abc', '0', '0.0000', '-1'])(
     'CARD_INSTALLMENT için geçersiz veya pozitif olmayan "%s" değerini reddeder',
     async (price) => {

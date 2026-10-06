@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
   listRawMaterials,
   RawMaterial,
@@ -44,13 +44,17 @@ function validatePriceForm(form: PriceForm): string | null {
   return null;
 }
 
-export function RawMaterialsPage() {
+export function RawMaterialsPage({
+  initialSearch = '',
+}: {
+  initialSearch?: string;
+}) {
   const [items, setItems] = useState<RawMaterial[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialSearch);
   const [thicknessFilter, setThicknessFilter] = useState('');
 
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -109,6 +113,26 @@ export function RawMaterialsPage() {
     setFormError(null);
     setDrawerOpen(true);
   };
+
+  const openedSearch = useRef('');
+  useEffect(() => {
+    setSearch(initialSearch);
+  }, [initialSearch]);
+
+  useEffect(() => {
+    const query = initialSearch.trim().toLowerCase();
+    if (!query || items.length === 0 || openedSearch.current === query) return;
+    const matches = items.filter(
+      (item) =>
+        item.name.toLowerCase().includes(query) ||
+        item.code.toLowerCase().includes(query),
+    );
+    if (matches.length !== 1) return;
+    openedSearch.current = query;
+    openPriceDrawer(matches[0]);
+    // Arama tek kayda indiğinde fiyat çekmecesini bir kez açar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, initialSearch]);
 
   const closeDrawer = () => {
     if (saving) return;
