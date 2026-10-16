@@ -1,5 +1,9 @@
 import { NotFoundException } from '@nestjs/common';
 import type { CitaMaterialPriceType } from '../../calculation-engine/calculators/cita-mdf-calculator';
+import {
+  COST_MATERIAL_PRICE_TYPE,
+  missingCostMaterialPriceMessage,
+} from './cost-material-price';
 
 export const SUPURGELIK_DECORATIVE_RATE_MISSING =
   'DECORATIVE_RATE_MISSING' as const;
@@ -15,12 +19,12 @@ export function supurgelikPpWrappingCostMissingMessage(): string {
 export class SupurgelikRawMaterialPriceMissingException extends NotFoundException {
   readonly errorCode = 'RAW_MATERIAL_PRICE_MISSING' as const;
 
+  readonly materialPriceType = COST_MATERIAL_PRICE_TYPE;
+
   constructor(
     readonly rawMaterialCode: string,
-    readonly materialPriceType: CitaMaterialPriceType = 'CARD_INSTALLMENT',
+    _materialPriceType?: CitaMaterialPriceType,
   ) {
-    super(
-      `Aktif MDF fiyatı bulunamadı: ${rawMaterialCode} / ${materialPriceType}`,
-    );
+    super(missingCostMaterialPriceMessage(rawMaterialCode));
   }
 }

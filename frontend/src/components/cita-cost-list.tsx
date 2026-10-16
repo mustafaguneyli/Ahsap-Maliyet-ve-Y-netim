@@ -26,9 +26,6 @@ import {
   friendlyMaterialPriceError,
   materialPriceTypeLabel,
   missingPurchasePriceLabel,
-  salePriceResultLabel,
-  showsCardSalePrice,
-  showsCashSalePrice,
   type MaterialPriceType,
 } from '../lib/material-price-type';
 import {
@@ -268,9 +265,7 @@ function CitaRowsTable({
   onProfitSaved?: (message: string) => void;
 }) {
   const groups = groupCitaRows(rows);
-  const showCash = showsCashSalePrice(materialPriceType);
-  const showCard = showsCardSalePrice(materialPriceType);
-  const colCount = 11 + (showCash ? 1 : 0) + (showCard ? 1 : 0) + 1;
+  const colCount = 14;
 
   return (
     <table className="cc-table cc-cita-table">
@@ -286,7 +281,8 @@ function CitaRowsTable({
           <th>İşçilik</th>
           <th>Üretim Maliyeti</th>
           <th>Kâr %</th>
-          <th className="cc-col-sale">{salePriceResultLabel(materialPriceType)}</th>
+          <th className="cc-col-sale">Nakit Satış</th>
+          <th className="cc-col-sale">Kart Satış</th>
           <th>Durum</th>
         </tr>
       </thead>
@@ -316,9 +312,6 @@ function CitaThicknessGroup({
   colCount: number;
   onProfitSaved?: (message: string) => void;
 }) {
-  const showCash = showsCashSalePrice(materialPriceType);
-  const showCard = showsCardSalePrice(materialPriceType);
-
   return (
     <>
       <tr className="cc-cita-group-heading">
@@ -368,15 +361,14 @@ function CitaThicknessGroup({
             />
           </td>
           <td className="cc-money">
-            {showCash ? (
-              <MoneyCell value={publishedPriceAmount(row, 'publishedCashPrice')} />
-            ) : showCard ? (
-              publishedPriceAmount(row, 'publishedCardPrice') != null ? (
-                <MoneyCell value={publishedPriceAmount(row, 'publishedCardPrice')} />
-              ) : (
-                row.pricing?.cardStatusMessage ?? 'Kart/taksit oranı tanımlı değil'
-              )
-            ) : null}
+            <MoneyCell value={publishedPriceAmount(row, 'publishedCashPrice')} />
+          </td>
+          <td className="cc-money">
+            {publishedPriceAmount(row, 'publishedCardPrice') != null ? (
+              <MoneyCell value={publishedPriceAmount(row, 'publishedCardPrice')} />
+            ) : (
+              row.pricing?.cardStatusMessage ?? 'Kart/taksit oranı tanımlı değil'
+            )}
           </td>
           <td className="cc-supurgelik-status-cell">
             <StatusCell row={row} materialPriceType={materialPriceType} />
@@ -829,8 +821,8 @@ export function CitaCostList({
           <h2>{data?.productName ?? 'Çıta'}</h2>
           <p>Standart ölçüler ve özel ölçü hesabı</p>
           <p className="cc-note">
-            Seçili MDF alış türü: {materialPriceTypeLabel(materialPriceType)}.
-            Yayımlanmış nakit satış fiyatı bu seçimden bağımsızdır.
+            MDF maliyet kaynağı: Kart / Taksitli Alış. Nakit ve kart satış fiyatları
+            ayrı kalır.
           </p>
         </div>
         <div className="cc-supurgelik-heading-actions">
@@ -905,7 +897,7 @@ export function CitaCostList({
         {customResult ? (
           <dl className="cc-cita-custom-result">
             <div>
-              <dt>Seçili MDF Alış Türü</dt>
+              <dt>MDF maliyet kaynağı</dt>
               <dd>
                 {materialPriceTypeLabel(
                   customResult.materialPriceType ?? materialPriceType,
@@ -962,33 +954,28 @@ export function CitaCostList({
               <dt>Fiyat Bandı</dt>
               <dd>{priceBandLabel(customResult) ?? '—'}</dd>
             </div>
-            {showsCashSalePrice(materialPriceType) ? (
-              <div>
-                <dt>Nakit Satış</dt>
-                <dd>
+            <div>
+              <dt>Nakit Satış</dt>
+              <dd>
+                <MoneyCell
+                  value={publishedPriceAmount(customResult, 'publishedCashPrice')}
+                />
+              </dd>
+            </div>
+            <div>
+              <dt>Kart / Taksit Satış</dt>
+              <dd>
+                {publishedPriceAmount(customResult, 'publishedCardPrice') != null ? (
                   <MoneyCell
-                    value={publishedPriceAmount(customResult, 'publishedCashPrice')}
+                    value={publishedPriceAmount(customResult, 'publishedCardPrice')}
                   />
-                </dd>
-              </div>
-            ) : null}
-            {showsCardSalePrice(materialPriceType) ? (
-              <div>
-                <dt>Kart / Taksit Satış</dt>
-                <dd>
-                  {publishedPriceAmount(customResult, 'publishedCardPrice') != null ? (
-                    <MoneyCell
-                      value={publishedPriceAmount(customResult, 'publishedCardPrice')}
-                    />
-                  ) : (
-                    customResult.pricing?.cardStatusMessage ??
-                    'Kart/taksit oranı tanımlı değil'
-                  )}
-                </dd>
-              </div>
-            ) : null}
-            {showsCashSalePrice(materialPriceType) &&
-            isPublishedPriceMissing(customResult) ? (
+                ) : (
+                  customResult.pricing?.cardStatusMessage ??
+                  'Kart/taksit oranı tanımlı değil'
+                )}
+              </dd>
+            </div>
+            {isPublishedPriceMissing(customResult) ? (
               <div className="cc-cita-custom-price-note">
                 <dt>Satış</dt>
                 <dd>Satış fiyatı tanımlı değil</dd>

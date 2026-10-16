@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Optional } from '@nestjs/common';
 import { decimalToString, toDecimal } from '../../common/decimal/decimal.util';
 import {
   citaMaterialCodeForThickness,
@@ -6,6 +6,7 @@ import {
   parseCitaThicknessMm,
 } from '../../calculation-engine/calculators/cita-net-calculator';
 import type { CitaMaterialPriceType } from '../../calculation-engine/calculators/cita-mdf-calculator';
+import { resolveCostMaterialPriceType } from './cost-material-price';
 import type { CitaProductionResult } from '../../calculation-engine/calculators/cita-production-calculator';
 import {
   CITA_PRODUCT_GROUP_SEED,
@@ -21,6 +22,10 @@ import {
   resolveCatalogProfitRate,
 } from '../pricing/profit-rate-catalog';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { sourceProductSizesByMm } from '../../data-store/firestore-source-bridge';
 import {
   attachCitaListPricing,
   loadCitaPublishedPriceBandViews,
@@ -170,6 +175,8 @@ export class CitaListService {
     private readonly prisma: PrismaService,
     private readonly citaProductionService: CitaProductionService,
     private readonly citaNetService: CitaNetService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
   /**
@@ -179,7 +186,27 @@ export class CitaListService {
    */
   async listProductionCosts(
     now: Date = new Date(),
-    materialPriceType: CitaMaterialPriceType = 'CARD_INSTALLMENT',
+    materialPriceTypeInput: CitaMaterialPriceType | string | null = 'CARD_INSTALLMENT',
+  ): Promise<{
+    productCode: string;
+    productName: string;
+    asOf: string;
+    materialPriceType: CitaMaterialPriceType;
+    verifiedMeasureCount: number;
+    rows: CitaListRow[];
+  }> {
+    const materialPriceType = resolveCostMaterialPriceType(materialPriceTypeInput);
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, () =>
+        this.computeListProductionCosts(now, materialPriceType),
+      );
+    }
+    return this.computeListProductionCosts(now, materialPriceType);
+  }
+
+  private async computeListProductionCosts(
+    now: Date,
+    materialPriceType: CitaMaterialPriceType,
   ) {
     const { product, rows: masters } = await discoverActiveProductMasterRows(
       this.prisma,
@@ -211,9 +238,7 @@ export class CitaListService {
     const productSizes =
       uniqueSizes.length === 0
         ? []
-        : await this.prisma.productSize.findMany({
-            where: { OR: uniqueSizes },
-          });
+        : await sourceProductSizesByMm(this.prisma, uniqueSizes);
     const sizeIdByMm = new Map(
       productSizes.map((size) => [`${size.widthMm}x${size.lengthMm}`, size.id]),
     );
@@ -275,7 +300,7 @@ export class CitaListService {
     } catch (error) {
       if (error instanceof CitaRawMaterialPriceMissingException) {
         const net = await this.citaNetService.resolveNet(query);
-        return priceMissingRow(net, error.materialPriceType);
+        return priceMissingRow(net, materialPriceType);
       }
       throw error;
     }

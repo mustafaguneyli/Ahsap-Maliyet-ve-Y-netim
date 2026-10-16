@@ -93,6 +93,53 @@ export async function loadCitaPublishedPriceBandViews(
   prisma: Pick<PrismaService, 'productGroup' | 'citaPublishedPriceBand'>,
   now: Date,
 ): Promise<CitaPublishedPriceBandView[]> {
+  const { currentCatalogCache } = await import('../../data-store/firestore-catalog-cache');
+  const { FIRESTORE_COLLECTIONS } = await import('../../firebase/firestore.collections');
+  const cache = currentCatalogCache();
+  if (cache) {
+    const group = cache.groupByCode(CITA_PRODUCT_GROUP_SEED.code);
+    if (!group) {
+      throw new BadRequestException('Ürün grubu bulunamadı: CITA');
+    }
+    const rows = cache
+      .collection(FIRESTORE_COLLECTIONS.citaPublishedPriceBands)
+      .filter(
+        (row) =>
+          row.productGroupId === group.id &&
+          cache.isCurrent(row, now),
+      )
+      .sort(
+        (a, b) =>
+          Number(a.minWidthMm) - Number(b.minWidthMm) ||
+          cache.asDate(b.effectiveFrom, 'effectiveFrom').getTime() -
+            cache.asDate(a.effectiveFrom, 'effectiveFrom').getTime(),
+      );
+    const thicknesses = cache.collection(FIRESTORE_COLLECTIONS.citaPublishedPriceBandThicknesses);
+    const seen = new Set<string>();
+    const views: CitaPublishedPriceBandView[] = [];
+    for (const row of rows) {
+      const key = `${row.minWidthMm}-${row.maxWidthMm}`;
+      if (seen.has(key)) {
+        throw new BadRequestException(
+          `CITA ${row.minWidthMm}-${row.maxWidthMm} mm için birden fazla geçerli yayınlanmış fiyat bandı bulundu.`,
+        );
+      }
+      seen.add(key);
+      views.push({
+        minWidthMm: Number(row.minWidthMm),
+        maxWidthMm: Number(row.maxWidthMm),
+        cashPrice: toDecimal(String(row.cashPrice)).toString(),
+        cardPrice: toDecimal(String(row.cardPrice)).toString(),
+        thicknessMm: thicknesses
+          .filter((item) => item.bandId === row.id)
+          .sort((a, b) => Number(a.thicknessMm) - Number(b.thicknessMm))
+          .map((item) => Number(item.thicknessMm)),
+        isActive: true,
+        effectiveTo: null,
+      });
+    }
+    return views;
+  }
   const group = await prisma.productGroup.findUnique({
     where: { code: CITA_PRODUCT_GROUP_SEED.code },
   });

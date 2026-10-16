@@ -1,0 +1,1 @@
+{"message":"Oturum geçersiz. Tekrar giriş yapın.","error":"Unauthorized","statusCode":401}

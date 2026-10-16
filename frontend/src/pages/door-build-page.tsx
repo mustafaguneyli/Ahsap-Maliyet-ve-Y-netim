@@ -28,8 +28,7 @@ import {
 import { getDoorBuildPricingSetting } from '../api/pricing-settings-api';
 import { listRawMaterials, type RawMaterial } from '../api/raw-materials-api';
 import {
-  DEFAULT_MATERIAL_PRICE_TYPE,
-  materialPriceTypeLabel,
+  COST_MATERIAL_PRICE_TYPE,
   type MaterialPriceType,
 } from '../lib/material-price-type';
 import {
@@ -221,9 +220,7 @@ export function DoorBuildPage(props: { onNavigateToOrders?: () => void }) {
   const [selectedMaterialId, setSelectedMaterialId] = useState<string | null>(
     null,
   );
-  const [materialPriceType, setMaterialPriceType] = useState<MaterialPriceType>(
-    DEFAULT_MATERIAL_PRICE_TYPE,
-  );
+  const materialPriceType = COST_MATERIAL_PRICE_TYPE;
 
   const [frameEnabled, setFrameEnabled] = useState(false);
   const [frameCode, setFrameCode] = useState<FrameCode>('34_MM');
@@ -1021,36 +1018,15 @@ export function DoorBuildPage(props: { onNavigateToOrders?: () => void }) {
         <div className="db-card">
           <h2>MDF Yüzeyi</h2>
           <p className="lead">
-            Yalnız 2100×2800 mm tabakalar. Seçilen alış türü kasa, pervaz ve
-            başlığa da aktarılır; eksikse diğerine geçilmez.
+            Yalnız 2100×2800 mm tabakalar. MDF maliyet kaynağı: Kart / Taksitli
+            Alış. Eksikse nakit fiyata geçilmez.
           </p>
-          <div className="db-field">
-            <span>MDF alış fiyatı</span>
-            <div className="db-price-type">
-              {(['CASH', 'CARD_INSTALLMENT'] as MaterialPriceType[]).map(
-                (type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    className={materialPriceType === type ? 'active' : undefined}
-                    aria-pressed={materialPriceType === type}
-                    onClick={() => setMaterialPriceType(type)}
-                  >
-                    {materialPriceTypeLabel(type)}
-                  </button>
-                ),
-              )}
-            </div>
-          </div>
           {materialsError ? (
             <div className="db-error">{materialsError}</div>
           ) : null}
           <div className="db-mdf-list" role="listbox" aria-label="MDF listesi">
             {sheetMaterials.map((material) => {
-              const priceLabel =
-                materialPriceType === 'CASH'
-                  ? material.cashPrice
-                  : material.cardInstallmentPrice;
+              const priceLabel = material.cardInstallmentPrice;
               return (
                 <label
                   key={material.id}
@@ -1074,7 +1050,7 @@ export function DoorBuildPage(props: { onNavigateToOrders?: () => void }) {
                         : ''}
                     </span>
                     <span>
-                      {materialPriceTypeLabel(materialPriceType)}:{' '}
+                      Kart / Taksitli Alış:{' '}
                       {priceLabel ? formatMoney(priceLabel) : 'tanımlı değil'}
                     </span>
                   </span>
@@ -1175,7 +1151,7 @@ export function DoorBuildPage(props: { onNavigateToOrders?: () => void }) {
               ) : null}
               <div className="db-info">
                 Birim maliyet seçilen Kapı Kasası katalog satırından gelir
-                (Nakit / Kart alış seçimine göre). Toplam = birim maliyet ×
+                (MDF kart/taksitli alış). Toplam = birim maliyet ×
                 girdiğiniz toplam boy. Kapı adediyle tekrar çarpılmaz; sabit
                 750/950 TL kullanılmaz.
               </div>

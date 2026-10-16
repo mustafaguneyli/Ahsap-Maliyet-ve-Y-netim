@@ -4,12 +4,6 @@ import type {
   DekoratifPervazRow,
 } from '../api/cost-calculation-api';
 import { formatPieceSizeCm } from '../lib/length';
-import {
-  salePriceResultLabel,
-  showsCardSalePrice,
-  showsCashSalePrice,
-  type MaterialPriceType,
-} from '../lib/material-price-type';
 import { formatPercentRate, formatTry } from '../lib/money';
 import { ProfitRateCell } from './profit-rate-cell';
 
@@ -18,7 +12,6 @@ type Props = {
     AyarliPervazMdfRow | DekoratifPervazRow | DekoratifGenisKilcikRow
   >;
   mode: 'ayarli' | 'dekoratif';
-  materialPriceType: MaterialPriceType;
   onProfitSaved?: (message: string) => void;
 };
 
@@ -32,10 +25,8 @@ function formatAdjustmentTl(value: string | null | undefined): string {
   return formatted === '—' ? formatted : `+${formatted.replace('₺', '')} TL`;
 }
 
-export function PervazCostTable({ rows, mode, materialPriceType, onProfitSaved }: Props) {
+export function PervazCostTable({ rows, mode, onProfitSaved }: Props) {
   const decorative = mode === 'dekoratif';
-  const showCash = showsCashSalePrice(materialPriceType);
-  const showCard = showsCardSalePrice(materialPriceType);
 
   return (
     <table
@@ -60,7 +51,7 @@ export function PervazCostTable({ rows, mode, materialPriceType, onProfitSaved }
             MDF Toplam
           </th>
           <th colSpan={4}>Masraflar</th>
-          <th colSpan={6}>Fiyat</th>
+          <th colSpan={7}>Fiyat</th>
         </tr>
         <tr>
           <th className="cc-th-sub">NET</th>
@@ -85,9 +76,8 @@ export function PervazCostTable({ rows, mode, materialPriceType, onProfitSaved }
               <th className="cc-th-sub">Düzeltme</th>
             </>
           )}
-          <th className="cc-th-sub cc-pervaz-sale-col">
-            {salePriceResultLabel(materialPriceType)}
-          </th>
+          <th className="cc-th-sub cc-pervaz-sale-col">Nakit Satış</th>
+          <th className="cc-th-sub cc-pervaz-sale-col">Kart Satış</th>
         </tr>
       </thead>
       <tbody>
@@ -234,29 +224,28 @@ export function PervazCostTable({ rows, mode, materialPriceType, onProfitSaved }
               <td
                 className="cc-money cc-pervaz-sale-col"
                 title={
-                  showCash && dekoratif
+                  dekoratif
                     ? `Yuvarlama öncesi: ${formatTry(
                         dekoratif.pricing.priceBeforeRounding,
                       )}`
                     : undefined
                 }
               >
-                {showCash ? (
-                  <span className="cc-badge cc-badge-cash">
-                    {formatWholeTry(row.pricing.publishedSalePrice)}
+                <span className="cc-badge cc-badge-cash">
+                  {formatWholeTry(row.pricing.publishedSalePrice)}
+                </span>
+              </td>
+              <td className="cc-money cc-pervaz-sale-col">
+                {row.pricing.cardSalePrice != null ? (
+                  <span className="cc-badge cc-badge-card">
+                    {formatWholeTry(row.pricing.cardSalePrice)}
                   </span>
-                ) : showCard ? (
-                  row.pricing.cardSalePrice != null ? (
-                    <span className="cc-badge cc-badge-card">
-                      {formatWholeTry(row.pricing.cardSalePrice)}
-                    </span>
-                  ) : (
-                    <span className="cc-card-unavailable">
-                      {row.pricing.cardStatusMessage ??
-                        'Kart/taksit oranı tanımlı değil'}
-                    </span>
-                  )
-                ) : null}
+                ) : (
+                  <span className="cc-card-unavailable">
+                    {row.pricing.cardStatusMessage ??
+                      'Kart/taksit oranı tanımlı değil'}
+                  </span>
+                )}
               </td>
             </tr>
           );

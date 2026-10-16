@@ -14,11 +14,7 @@ import {
 import { saveChangedPurchasePrices } from '../lib/material-purchase-prices';
 import {
   friendlyMaterialPriceError,
-  materialPriceTypeLabel,
   missingPurchasePriceLabel,
-  salePriceResultLabel,
-  showsCardSalePrice,
-  showsCashSalePrice,
   type MaterialPriceType,
 } from '../lib/material-price-type';
 import {
@@ -226,8 +222,6 @@ function SupurgelikTable({
   onProfitSaved?: (message: string) => void;
 }) {
   const decorative = isDecorativeProduct(productCode);
-  const showCash = showsCashSalePrice(materialPriceType);
-  const showCard = showsCardSalePrice(materialPriceType);
 
   return (
     <table className="cc-table cc-supurgelik-table">
@@ -243,8 +237,9 @@ function SupurgelikTable({
           <th>Kâr %</th>
           <th>Kâr Tutarı</th>
           {decorative ? <th>Dekoratif %</th> : null}
-          {decorative && showCash ? <th>Baz Nakit</th> : null}
-          <th>{salePriceResultLabel(materialPriceType)}</th>
+          {decorative ? <th>Baz Nakit</th> : null}
+          <th>Nakit Satış</th>
+          <th>Kart Satış</th>
           <th>Durum</th>
         </tr>
       </thead>
@@ -311,7 +306,7 @@ function SupurgelikTable({
                   {formatPercentRate(row.pricing.decorativeRate)}
                 </td>
               ) : null}
-              {decorative && showCash ? (
+              {decorative ? (
                 <td className="cc-money">
                   {row.pricing.basePublishedCashPrice == null ? (
                     '—'
@@ -323,11 +318,10 @@ function SupurgelikTable({
                 </td>
               ) : null}
               <td className="cc-money cc-supurgelik-price-col">
-                {showCash ? (
-                  <PublishedPriceCell row={row} />
-                ) : showCard ? (
-                  <PublishedCardCell row={row} />
-                ) : null}
+                <PublishedPriceCell row={row} />
+              </td>
+              <td className="cc-money cc-supurgelik-price-col">
+                <PublishedCardCell row={row} />
               </td>
               <td className="cc-supurgelik-status-cell">
                 {wrappingMissingInPriceCell ? (
@@ -870,8 +864,8 @@ export function SupurgelikCostList({
           <h2>{data?.productName ?? meta.label}</h2>
           <p>{meta.description}</p>
           <p className="cc-note">
-            Seçili MDF alış türü: {materialPriceTypeLabel(materialPriceType)}. Dört
-            varyant da bu türü kullanır.
+            MDF maliyet kaynağı: Kart / Taksitli Alış. Dört varyant da bu kaynağı
+            kullanır.
           </p>
         </div>
         <div className="cc-supurgelik-heading-actions">

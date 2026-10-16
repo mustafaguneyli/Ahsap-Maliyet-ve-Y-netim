@@ -1,4 +1,7 @@
 import { Injectable, Optional } from '@nestjs/common';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
 import { calculateCitaProductionCost } from '../../calculation-engine/calculators/cita-production-calculator';
 import { ExtraCostsService } from '../extra-costs/extra-costs.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -16,6 +19,8 @@ export class CitaProductionService {
     private readonly citaMdfService: CitaMdfService,
     private readonly extraCostsService: ExtraCostsService,
     @Optional() private readonly prisma?: PrismaService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
   /**
@@ -23,6 +28,13 @@ export class CitaProductionService {
    * ExtraCost yoksa mdfUnitCost döner, productionCost null kalır.
    */
   async getProductionCost(query: CitaNetQueryDto, now: Date = new Date()) {
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, () => this.computeProductionCost(query, now));
+    }
+    return this.computeProductionCost(query, now);
+  }
+
+  private async computeProductionCost(query: CitaNetQueryDto, now: Date) {
     const mdf = await this.citaMdfService.getMdfCost(query, now);
     const extras = await this.extraCostsService.listForProductGroup('CITA', now);
 
@@ -40,6 +52,13 @@ export class CitaProductionService {
    * Custom width ticari banda sınıflandırılır; DB master yazılmaz.
    */
   async getQuotedProductionCost(query: CitaNetQueryDto, now: Date = new Date()) {
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, () => this.computeQuotedProductionCost(query, now));
+    }
+    return this.computeQuotedProductionCost(query, now);
+  }
+
+  private async computeQuotedProductionCost(query: CitaNetQueryDto, now: Date) {
     const cost = await this.getProductionCost(query, now);
     if (this.prisma == null) {
       throw new Error('CITA published pricing için PrismaService gerekir.');

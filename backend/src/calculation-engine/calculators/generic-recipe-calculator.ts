@@ -173,7 +173,7 @@ export function calculateGenericRecipeCost(
 
     if (item.unitPrice == null || item.unitPrice === '') {
       missingSources.push(
-        `${item.rawMaterialCode} için ${input.materialPriceType} alış fiyatı yok.`,
+        `${item.rawMaterialCode} için MDF kart/taksitli alış fiyatı tanımlı değil`,
       );
       materialOk = false;
       continue;

@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   AuditAction,
@@ -20,7 +21,12 @@ import {
 } from '../../calculation-engine/calculators/generic-recipe-calculator';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
-import { selectCurrentMaterialPrice } from './current-material-price';
+import { resolveCostMaterialPrice } from './current-material-price';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { GenericRecipeFirestoreRepository } from '../../data-store/generic-recipe-firestore.repository';
+import { copyRecipeItemsDeep } from '../../data-store/firestore-recipe';
+import { selectExtraCostsByPrecedence } from '../../data-store/extra-cost-precedence';
 import type {
   CreateCatalogItemDto,
   GenericExtraCostDto,
@@ -66,7 +72,16 @@ export class GenericRecipeService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
+
+  private firestoreCatalog(): GenericRecipeFirestoreRepository | null {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return new GenericRecipeFirestoreRepository(this.firestoreStore);
+    }
+    return null;
+  }
 
   async listCostRows(
     productGroupCode: string,
@@ -74,6 +89,13 @@ export class GenericRecipeService {
     now: Date = new Date(),
   ) {
     const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
+    const catalog = this.firestoreCatalog();
+    if (catalog) {
+      const { withCatalogCache } = await import('../../data-store/firestore-catalog-cache');
+      return withCatalogCache(this.firestoreStore, () =>
+        this.listCostRowsFromFirestore(catalog, productGroupCode, materialPriceType, now),
+      );
+    }
     const group = await this.prisma.productGroup.findUnique({
       where: { code: productGroupCode },
       include: {
@@ -157,6 +179,55 @@ export class GenericRecipeService {
     };
   }
 
+  private async listCostRowsFromFirestore(
+    catalog: GenericRecipeFirestoreRepository,
+    productGroupCode: string,
+    materialPriceType: MaterialPriceType,
+    now: Date,
+  ) {
+    const graph = await catalog.loadActiveGenericGroup(productGroupCode);
+    const pricing = await catalog.loadGroupPricing(graph.group.id);
+    const rows: Array<GenericRecipeCostResult & { recipeId: string; productId: string; sizeId: string }> = [];
+    for (const product of graph.products) {
+      const extras = await catalog.loadExtras(graph.group.id, product.id, now);
+      for (const recipe of product.recipes) {
+        const resolvedProfit = await catalog.resolveProductProfit(
+          product.id,
+          graph.group.id,
+          recipe.productSizeId,
+          product.code,
+          now,
+        );
+        const computed = await this.computeFromRecipeEntities({
+          group: graph.group,
+          product,
+          size: recipe.productSize,
+          items: recipe.items,
+          extras,
+          pricing: {
+            ...pricing,
+            profitRate: resolvedProfit.profitRate ?? pricing.profitRate,
+          },
+          materialPriceType,
+          now,
+        });
+        rows.push({
+          ...computed,
+          recipeId: recipe.id,
+          productId: product.id,
+          sizeId: recipe.productSizeId,
+        });
+      }
+    }
+    return {
+      productGroupCode: graph.group.code,
+      productGroupName: graph.group.name,
+      calculatorType: graph.group.calculatorType,
+      materialPriceType,
+      rows,
+    };
+  }
+
   async preview(dto: GenericPreviewDto, now: Date = new Date()) {
     assertPositiveInt('widthMm', dto.widthMm);
     assertPositiveInt('lengthMm', dto.lengthMm);
@@ -168,14 +239,31 @@ export class GenericRecipeService {
     let profitRate = dto.profitRate ?? null;
     let cardMarkupRate = dto.cardMarkupRate ?? null;
     if (dto.productGroupCode) {
-      const group = await this.prisma.productGroup.findUnique({
-        where: { code: dto.productGroupCode },
-      });
-      if (group) {
-        const pricing = await this.resolveGroupPricing(group.id, now);
-        vatRate = vatRate ?? pricing.vatRate;
-        profitRate = profitRate ?? pricing.profitRate;
-        cardMarkupRate = cardMarkupRate ?? pricing.cardMarkupRate;
+      const catalog = this.firestoreCatalog();
+      if (catalog && this.firestoreStore) {
+        const { currentCatalogCache, withCatalogCache } = await import(
+          '../../data-store/firestore-catalog-cache'
+        );
+        await withCatalogCache(this.firestoreStore, async () => {
+          const group = currentCatalogCache()?.groupByCode(dto.productGroupCode!);
+          if (!group) {
+            return;
+          }
+          const pricing = await catalog.loadGroupPricing(String(group.id));
+          vatRate = vatRate ?? pricing.vatRate;
+          profitRate = profitRate ?? pricing.profitRate;
+          cardMarkupRate = cardMarkupRate ?? pricing.cardMarkupRate;
+        });
+      } else {
+        const group = await this.prisma.productGroup.findUnique({
+          where: { code: dto.productGroupCode },
+        });
+        if (group) {
+          const pricing = await this.resolveGroupPricing(group.id, now);
+          vatRate = vatRate ?? pricing.vatRate;
+          profitRate = profitRate ?? pricing.profitRate;
+          cardMarkupRate = cardMarkupRate ?? pricing.cardMarkupRate;
+        }
       }
     }
 
@@ -206,6 +294,42 @@ export class GenericRecipeService {
   }): Promise<GenericRecipeCostResult> {
     const now = input.now ?? new Date();
     const materialPriceType = resolveCitaMaterialPriceType(input.materialPriceType);
+    const catalog = this.firestoreCatalog();
+    if (catalog) {
+      const found = await catalog.findProductById(input.productId);
+      if (!found) {
+        throw new NotFoundException('Aktif ürün bulunamadı.');
+      }
+      if (found.group.calculatorType !== CalculatorType.GENERIC_RECIPE) {
+        throw new BadRequestException('Ürün GENERIC_RECIPE değil.');
+      }
+      const recipe = await catalog.findSizeRecipe(input.productId, input.widthMm, input.lengthMm);
+      if (!recipe) {
+        throw new BadRequestException('Aktif reçete bulunamadı.');
+      }
+      const pricing = await catalog.loadGroupPricing(recipe.group.id);
+      const resolvedProfit = await catalog.resolveProductProfit(
+        recipe.product.id,
+        recipe.group.id,
+        recipe.size.id,
+        recipe.product.code,
+        now,
+      );
+      const extras = await catalog.loadExtras(recipe.group.id, recipe.product.id, now);
+      return this.computeFromRecipeEntities({
+        group: recipe.group,
+        product: recipe.product,
+        size: recipe.size,
+        items: recipe.items,
+        extras,
+        pricing: {
+          ...pricing,
+          profitRate: resolvedProfit.profitRate ?? pricing.profitRate,
+        },
+        materialPriceType,
+        now,
+      });
+    }
     const product = await this.prisma.product.findFirst({
       where: { id: input.productId, isActive: true },
       include: { productGroup: true },
@@ -287,6 +411,10 @@ export class GenericRecipeService {
    * GROUP → ProductGroup (yalnız aktif ürün yoksa)
    */
   async deactivateCatalogItem(dto: DeactivateCatalogItemDto) {
+    const catalog = this.firestoreCatalog();
+    if (catalog) {
+      return catalog.deactivate(dto);
+    }
     const reason = dto.reason?.trim() || 'Kullanıcı tarafından kaldırıldı';
 
     if (dto.target === 'SIZE') {
@@ -476,6 +604,10 @@ export class GenericRecipeService {
   async saveCatalog(dto: CreateCatalogItemDto) {
     assertPositiveInt('widthMm', dto.widthMm);
     assertPositiveInt('lengthMm', dto.lengthMm);
+    const catalog = this.firestoreCatalog();
+    if (catalog) {
+      return this.saveCatalogOnFirestore(catalog, dto);
+    }
 
     if (dto.mode === 'NEW_GROUP') {
       return this.saveNewGroup(dto);
@@ -506,6 +638,66 @@ export class GenericRecipeService {
       return this.saveNewProduct(group, dto);
     }
     return this.saveNewSize(group, dto);
+  }
+
+  private async saveCatalogOnFirestore(
+    catalog: GenericRecipeFirestoreRepository,
+    dto: CreateCatalogItemDto,
+  ) {
+    let recipeItems = dto.recipeItems;
+    let groupCode = dto.newGroupCode?.trim().toUpperCase() ?? dto.productGroupCode?.trim();
+    let groupName = dto.newGroupName?.trim() ?? dto.productGroupCode;
+    let productCode = dto.newProductCode?.trim().toUpperCase() ?? dto.productCode?.trim();
+    let productName = dto.productName?.trim();
+    let productUnit = dto.productUnit ?? 'ADET';
+
+    if (dto.mode !== 'NEW_GROUP') {
+      const code = dto.productGroupCode?.trim();
+      if (!code) {
+        throw new BadRequestException('productGroupCode zorunludur.');
+      }
+      const graph = await catalog.loadActiveGenericGroup(code);
+      groupCode = graph.group.code;
+      groupName = graph.group.name;
+      if (dto.mode === 'NEW_SIZE') {
+        const product = graph.products.find((row) => row.code === dto.productCode?.trim());
+        if (!product) {
+          throw new NotFoundException(`Aktif ürün bulunamadı: ${dto.productCode}`);
+        }
+        productCode = product.code;
+        productName = product.name;
+        productUnit = product.unit;
+        if ((!recipeItems || recipeItems.length === 0) && dto.copyRecipeFromSizeId) {
+          recipeItems = await catalog.copyRecipeItems(product.id, dto.copyRecipeFromSizeId);
+        }
+      }
+    }
+
+    if (!recipeItems?.length && dto.mode !== 'NEW_SIZE') {
+      if (!dto.recipeItems?.length) {
+        throw new BadRequestException('Generic ürün için recipeItems zorunludur.');
+      }
+    }
+    if (!recipeItems?.length) {
+      throw new BadRequestException(
+        'recipeItems zorunludur veya copyRecipeFromSizeId ile kopyalayın.',
+      );
+    }
+
+    await this.preview({
+      productGroupCode: groupCode,
+      productGroupName: groupName,
+      productCode,
+      productName,
+      productUnit,
+      widthMm: dto.widthMm,
+      lengthMm: dto.lengthMm,
+      displayName: dto.displayName,
+      materialPriceType: dto.materialPriceType,
+      recipeItems,
+      extraCosts: dto.extraCosts,
+    });
+    return catalog.saveCatalog({ ...dto, recipeItems });
   }
 
   private async saveNewGroup(dto: CreateCatalogItemDto) {
@@ -1027,6 +1219,10 @@ export class GenericRecipeService {
     productId: string,
     fromSizeId: string,
   ): Promise<GenericRecipeItemDto[]> {
+    const catalog = this.firestoreCatalog();
+    if (catalog) {
+      return catalog.copyRecipeItems(productId, fromSizeId);
+    }
     const recipe = await this.prisma.recipe.findUnique({
       where: {
         productId_productSizeId: {
@@ -1041,22 +1237,25 @@ export class GenericRecipeService {
     if (!recipe?.isActive || recipe.items.length === 0) {
       throw new BadRequestException('Kopyalanacak aktif reçete bulunamadı.');
     }
-    return recipe.items.map((item) => {
-      if (!item.calculationMode) {
-        throw new BadRequestException(
-          'Kaynak reçete satırında calculationMode yok; generic kopyalama yapılamaz.',
-        );
-      }
-      return {
-        rawMaterialId: item.rawMaterialId,
-        calculationMode: item.calculationMode,
-        quantity: item.quantity.toString(),
-        quantityUnit: item.quantityUnit ?? undefined,
-        wasteRate: item.wasteRate?.toString(),
-        productionYieldId: item.productionYieldId ?? undefined,
-        sortOrder: item.sortOrder,
-      };
-    });
+    try {
+      return copyRecipeItemsDeep(
+        recipe.items.map((item) => ({
+          id: item.id,
+          recipeId: item.recipeId,
+          rawMaterialId: item.rawMaterialId,
+          productionYieldId: item.productionYieldId,
+          quantity: item.quantity.toString(),
+          calculationMode: item.calculationMode,
+          quantityUnit: item.quantityUnit,
+          wasteRate: item.wasteRate?.toString() ?? null,
+          sortOrder: item.sortOrder,
+        })),
+      );
+    } catch (error) {
+      throw new BadRequestException(
+        error instanceof Error ? error.message : 'Reçete kopyalanamadı.',
+      );
+    }
   }
 
   private async resolvePreviewItems(
@@ -1064,6 +1263,10 @@ export class GenericRecipeService {
     now: Date,
     materialPriceType: MaterialPriceType,
   ): Promise<GenericRecipeItemInput[]> {
+    const catalog = this.firestoreCatalog();
+    if (catalog) {
+      return catalog.resolvePreviewItems(items, now, materialPriceType);
+    }
     const out: GenericRecipeItemInput[] = [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
@@ -1076,11 +1279,7 @@ export class GenericRecipeService {
           'Aktif ham madde seçilmelidir. Yoksa Ham Maddeler ekranından tanımlayın.',
         );
       }
-      const price = selectCurrentMaterialPrice(
-        material.prices,
-        materialPriceType,
-        now,
-      );
+      const price = resolveCostMaterialPrice(material.prices, now);
       let netQty: number | null = null;
       if (item.productionYieldId) {
         const y = await this.prisma.productionYield.findUnique({
@@ -1122,6 +1321,10 @@ export class GenericRecipeService {
   }
 
   private async resolveGroupPricing(groupId: string, now: Date) {
+    const catalog = this.firestoreCatalog();
+    if (catalog) {
+      return catalog.loadGroupPricing(groupId);
+    }
     void now;
     const groupSetting = await this.prisma.pricingSetting.findFirst({
       where: {
@@ -1153,6 +1356,10 @@ export class GenericRecipeService {
     productId: string | null,
     now: Date,
   ): Promise<GenericExtraCostInput[]> {
+    const catalog = this.firestoreCatalog();
+    if (catalog) {
+      return catalog.loadExtras(groupId, productId, now);
+    }
     const values = await this.prisma.extraCostValue.findMany({
       where: {
         isActive: true,
@@ -1173,27 +1380,23 @@ export class GenericRecipeService {
       orderBy: { effectiveFrom: 'desc' },
     });
 
-    // product override typeCode bazında group’u ezer
-    const byType = new Map<string, (typeof values)[number]>();
-    for (const v of values) {
-      if (!v.extraCostType.isActive) continue;
-      const existing = byType.get(v.extraCostType.code);
-      if (!existing) {
-        byType.set(v.extraCostType.code, v);
-        continue;
-      }
-      if (v.productId != null && existing.productId == null) {
-        byType.set(v.extraCostType.code, v);
-      }
-    }
-
-    return [...byType.values()].map((v) => ({
-      typeCode: v.extraCostType.code,
-      typeName: v.extraCostType.name,
-      amount: v.amount.toString(),
-      calculationMode: v.calculationMode,
-      scope: v.productId ? ('PRODUCT' as const) : ('GROUP' as const),
-    }));
+    return selectExtraCostsByPrecedence(
+      values.map((value) => ({
+        id: value.id,
+        extraCostTypeId: value.extraCostTypeId,
+        typeCode: value.extraCostType.code,
+        typeName: value.extraCostType.name,
+        typeIsActive: value.extraCostType.isActive,
+        productGroupId: value.productGroupId,
+        productId: value.productId,
+        amount: value.amount.toString(),
+        calculationMode: value.calculationMode,
+        effectiveFrom: value.effectiveFrom,
+        effectiveTo: value.effectiveTo,
+        isActive: value.isActive,
+      })),
+      { productGroupId: groupId, productId, now },
+    );
   }
 
   private async computeFromRecipeEntities(input: {
@@ -1203,10 +1406,10 @@ export class GenericRecipeService {
     items: Array<{
       sortOrder: number;
       rawMaterialId: string;
-      quantity: Prisma.Decimal;
+      quantity: { toString(): string };
       calculationMode: RecipeCalculationMode | null;
       quantityUnit: string | null;
-      wasteRate: Prisma.Decimal | null;
+      wasteRate: { toString(): string } | null;
       productionYieldId: string | null;
       rawMaterial: {
         id: string;
@@ -1214,7 +1417,7 @@ export class GenericRecipeService {
         name: string;
         priceBasis: GenericRecipeItemInput['priceBasis'];
         isActive: boolean;
-        prices: Parameters<typeof selectCurrentMaterialPrice>[0];
+        prices: Parameters<typeof resolveCostMaterialPrice>[0];
       };
       productionYield: { netQty: number; isActive: boolean } | null;
     }>;
@@ -1240,11 +1443,7 @@ export class GenericRecipeService {
           `Ham madde pasif: ${item.rawMaterial.code}`,
         );
       }
-      const price = selectCurrentMaterialPrice(
-        item.rawMaterial.prices,
-        input.materialPriceType,
-        input.now,
-      );
+      const price = resolveCostMaterialPrice(item.rawMaterial.prices, input.now);
       recipeInputs.push({
         sortOrder: item.sortOrder,
         rawMaterialId: item.rawMaterial.id,

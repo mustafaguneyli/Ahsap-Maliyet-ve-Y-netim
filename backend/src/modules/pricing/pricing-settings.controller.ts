@@ -86,6 +86,7 @@ export class PricingSettingsController {
   }
 
   /** PATCH /pricing-settings/cita — group-scope kart oranı version/audit. */
+  @Patch('cita')
   replaceCitaGroup(@Body() dto: UpdateCitaPricingSettingDto) {
     return this.pricingSettingsService.replaceCitaGroupSetting(dto);
   }

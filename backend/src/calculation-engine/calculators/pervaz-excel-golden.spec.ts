@@ -669,14 +669,13 @@ describe('PervazCostTable UI smoke (mevcut kaynak, yeni özellik yok)', () => {
     'utf8',
   );
 
-  it('Fiyat grouped header colSpan=6; alış türüne göre tek satış sütunu', () => {
-    expect(tableSrc).toContain('<th colSpan={6}>Fiyat</th>');
+  it('Fiyat grouped header colSpan=7; nakit ve kart satış ayrı sütun', () => {
+    expect(tableSrc).toContain('<th colSpan={7}>Fiyat</th>');
     expect(tableSrc).toContain('<th colSpan={4}>Masraflar</th>');
     expect(tableSrc).toContain('<th colSpan={2}>Ana MDF</th>');
     expect(tableSrc).toContain('<th colSpan={2}>Kılçık</th>');
-    expect(tableSrc).toContain('salePriceResultLabel(materialPriceType)');
-    expect(tableSrc).toContain('showsCashSalePrice');
-    expect(tableSrc).toContain('showsCardSalePrice');
+    expect(tableSrc).toContain('Nakit Satış');
+    expect(tableSrc).toContain('Kart Satış');
     expect(tableSrc).toContain('Yuvarlanmış');
     expect(tableSrc).toContain('Düzeltme');
     expect(tableSrc).toContain('Dek. Fark %');

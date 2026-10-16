@@ -1,4 +1,17 @@
-const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+import { getIdToken, notifyUnauthorized } from './auth';
+
+function resolveApiBaseUrl(): string {
+  const fromEnv = import.meta.env.VITE_API_URL?.trim();
+  if (fromEnv) {
+    return fromEnv.replace(/\/$/, '');
+  }
+  if (import.meta.env.DEV) {
+    return 'http://localhost:3000';
+  }
+  throw new Error('VITE_API_URL production build için zorunludur.');
+}
+
+export const apiUrl = resolveApiBaseUrl();
 
 export type ApiErrorBody = {
   message?: string | string[];
@@ -49,21 +62,50 @@ export function resolveApiErrorMessage(
   return fallbackMessage;
 }
 
+export async function authHeaders(
+  forceRefresh = false,
+): Promise<Record<string, string>> {
+  const token = await getIdToken(forceRefresh);
+  if (!token) {
+    return {};
+  }
+  return { Authorization: `Bearer ${token}` };
+}
+
+async function fetchApi(
+  path: string,
+  options: RequestInit | undefined,
+  forceRefresh: boolean,
+): Promise<Response> {
+  const bearer = await authHeaders(forceRefresh);
+  return fetch(`${apiUrl}${path}`, {
+    ...options,
+    cache: 'no-store',
+    headers: {
+      'Content-Type': 'application/json',
+      ...bearer,
+      ...(options?.headers ?? {}),
+    },
+  });
+}
+
 export async function apiRequest<T>(
   path: string,
   options?: RequestInit,
 ): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${apiUrl}${path}`, {
-      ...options,
-      cache: 'no-store',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(options?.headers ?? {}),
-      },
-    });
-  } catch {
+    response = await fetchApi(path, options, false);
+    if (response.status === 401) {
+      response = await fetchApi(path, options, true);
+      if (response.status === 401) {
+        notifyUnauthorized();
+      }
+    }
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
     throw new Error(
       'Sunucuya bağlanılamadı. Formdaki veriler duruyor; bağlantı gelince tekrar deneyin.',
     );
@@ -89,5 +131,3 @@ export async function apiRequest<T>(
 
   return body as T;
 }
-
-export { apiUrl };

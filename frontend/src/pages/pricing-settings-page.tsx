@@ -24,6 +24,7 @@ export function PricingSettingsPage() {
   const [rateInput, setRateInput] = useState('');
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -68,10 +69,12 @@ export function PricingSettingsPage() {
     }
     setSaving(true);
     setFormError(null);
+    setNotice(null);
     try {
       await updateGroupCardMarkupRate(editingCode, rate);
       cancelEdit();
       await load();
+      setNotice('Kart / taksit oranı kaydedildi.');
     } catch (err) {
       setFormError(
         err instanceof ApiError ? err.message : 'Kart / taksit farkı kaydedilemedi.',
@@ -162,6 +165,7 @@ export function PricingSettingsPage() {
             </tbody>
           </table>
           {formError ? <p className="pricing-error">{formError}</p> : null}
+          {notice ? <p className="pricing-muted">{notice}</p> : null}
         </div>
       ) : null}
     </section>

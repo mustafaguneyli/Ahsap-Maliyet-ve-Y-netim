@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { MaterialPriceType, PricingModifierType } from '@prisma/client';
 import { toDecimal } from '../../common/decimal/decimal.util';
 import { CalculationEngine } from '../../calculation-engine/calculation-engine';
@@ -51,8 +51,28 @@ import {
   applyPublishedSalePrices,
   CashOverrideSnapshot,
 } from '../price-overrides/apply-published-sale-prices';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import {
+  sourceAllProductSizes,
+  sourceGenericYields,
+  sourceGenericYieldsWithMaterials,
+  sourceGroupByCode,
+  sourceLoadProfitRateCatalog,
+  sourceMaterialsByCodes,
+  sourceMaterialsByThickness,
+  sourceMaterialWithPrices,
+  sourcePriceOverridesForSizes,
+  sourcePricingSettings,
+  sourceProductByGroupCode,
+  sourceProductSizesByMm,
+  sourceRowExceptions,
+  sourceThicknessModifiers,
+} from '../../data-store/firestore-source-bridge';
 import { PrismaService } from '../../prisma/prisma.service';
-import { selectCurrentMaterialPrice } from './current-material-price';
+import { resolveCostMaterialPrice } from './current-material-price';
+import { missingCostMaterialPriceMessage } from './cost-material-price';
 import { resolveCitaMaterialPriceType } from './cita-mdf.service';
 import type { CitaMaterialPriceType } from '../../calculation-engine/calculators/cita-mdf-calculator';
 import {
@@ -88,11 +108,28 @@ export class CostCalculationService {
     private readonly prisma: PrismaService,
     private readonly extraCostsService: ExtraCostsService,
     private readonly pervazQtyService: PervazQtyService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
+
+  private runWithSource<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, fn);
+    }
+    return fn();
+  }
 
   async getDoorFrameMdfCosts(
     variant: DoorFrameVariantCode,
     now: Date = new Date(),
+    materialPriceTypeInput?: string | null,
+  ) {
+    return this.runWithSource(() => this.computeDoorFrameMdfCosts(variant, now, materialPriceTypeInput));
+  }
+
+  private async computeDoorFrameMdfCosts(
+    variant: DoorFrameVariantCode,
+    now: Date,
     materialPriceTypeInput?: string | null,
   ) {
     const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
@@ -107,19 +144,12 @@ export class CostCalculationService {
     ];
     const neededCodes = [primaryCode, ...secondaryCodes];
 
-    // Fiyatları her istekte DB'den oku; sabitlenmiş maliyet saklanmaz.
-    const materials = await this.prisma.rawMaterial.findMany({
-      where: { code: { in: neededCodes }, isActive: true },
-      include: {
-        prices: {
-          where: {
-            priceType: materialPriceType as MaterialPriceType,
-            isActive: true,
-          },
-          orderBy: { effectiveFrom: 'desc' },
-        },
-      },
-    });
+    // Fiyatları her istekte kaynaktan oku; sabitlenmiş maliyet saklanmaz.
+    const materials = await sourceMaterialsByCodes(
+      this.prisma,
+      neededCodes,
+      materialPriceType as MaterialPriceType,
+    );
 
     const materialByCode = new Map(materials.map((m) => [m.code, m]));
     const currentPriceByCode = new Map<string, string>();
@@ -129,26 +159,17 @@ export class CostCalculationService {
         throw new NotFoundException(`Aktif ham madde bulunamadı: ${code}`);
       }
       const material = materialByCode.get(code)!;
-      const current = selectCurrentMaterialPrice(
-        material.prices,
-        materialPriceType as MaterialPriceType,
-        now,
-      );
+      const current = resolveCostMaterialPrice(material.prices, now);
       if (!current) {
-        throw new NotFoundException(
-          `${code} için şu an geçerli ${materialPriceType} alış fiyatı bulunamadı.`,
-        );
+        throw new NotFoundException(missingCostMaterialPriceMessage(code));
       }
       currentPriceByCode.set(code, current.price.toString());
     }
 
-    const yields = await this.prisma.productionYield.findMany({
-      where: {
-        productId: null,
-        isActive: true,
-        rawMaterialId: { in: materials.map((m) => m.id) },
-      },
-    });
+    const yields = await sourceGenericYields(
+      this.prisma,
+      materials.map((m) => m.id),
+    );
 
     const yieldKey = (rawMaterialId: string, w: number, l: number) =>
       `${rawMaterialId}|${w}|${l}`;
@@ -198,19 +219,18 @@ export class CostCalculationService {
     );
     const { productId, productGroupId, vatRate, profitRate, cardMarkupRate } =
       await this.requireProductPricingRates(variant);
-    const profitCatalog = await loadProfitRateCatalog(
+    const profitCatalog = await sourceLoadProfitRateCatalog(
       this.prisma,
       productId,
       productGroupId,
     );
-    const productSizes = await this.prisma.productSize.findMany({
-      where: {
-        OR: sizeInputs.map((size) => ({
-          widthMm: size.widthCm * 10,
-          lengthMm: size.lengthCm * 10,
-        })),
-      },
-    });
+    const productSizes = await sourceProductSizesByMm(
+      this.prisma,
+      sizeInputs.map((size) => ({
+        widthMm: size.widthCm * 10,
+        lengthMm: size.lengthCm * 10,
+      })),
+    );
     const sizeIdByMm = new Map(
       productSizes.map((size) => [`${size.widthMm}x${size.lengthMm}`, size.id]),
     );
@@ -299,6 +319,34 @@ export class CostCalculationService {
     prefetchedPpWrappingCost?: string | null,
     prefetchedProfitCatalog?: ProfitRateCatalog,
   ) {
+    return this.runWithSource(() =>
+      this.computeSupurgelikMdfCost(
+        input,
+        now,
+        prefetchedExtraCosts,
+        prefetchedPricing,
+        prefetchedDecorativeRates,
+        prefetchedPpWrappingCost,
+        prefetchedProfitCatalog,
+      ),
+    );
+  }
+
+  private async computeSupurgelikMdfCost(
+    input: {
+      productCode: SupurgelikProductCode;
+      thicknessMm: number;
+      widthMm: number;
+      lengthMm: number;
+      materialPriceType?: string | null;
+    },
+    now: Date,
+    prefetchedExtraCosts?: SupurgelikExtraCostContext,
+    prefetchedPricing?: SupurgelikDuzPricingContext,
+    prefetchedDecorativeRates?: SupurgelikDecorativeRateMap,
+    prefetchedPpWrappingCost?: string | null,
+    prefetchedProfitCatalog?: ProfitRateCatalog,
+  ) {
     const materialPriceType = resolveCitaMaterialPriceType(input.materialPriceType);
     if (!SUPURGELIK_PRODUCT_CODES.includes(input.productCode)) {
       throw new BadRequestException('Geçersiz Süpürgelik productCode.');
@@ -313,47 +361,19 @@ export class CostCalculationService {
       }
     }
 
-    const group = await this.prisma.productGroup.findUnique({
-      where: { code: 'SUPURGELIK' },
-    });
+    const group = await sourceGroupByCode(this.prisma, 'SUPURGELIK');
     const product = group
-      ? await this.prisma.product.findUnique({
-          where: {
-            productGroupId_code: {
-              productGroupId: group.id,
-              code: input.productCode,
-            },
-          },
-        })
+      ? await sourceProductByGroupCode(this.prisma, group.id, input.productCode)
       : null;
     if (!group?.isActive || !product?.isActive) {
       throw new NotFoundException(`Aktif Süpürgelik ürünü bulunamadı: ${input.productCode}`);
     }
 
-    const masters = await this.prisma.productionYield.findMany({
-      where: {
-        productId: null,
-        isActive: true,
-        pieceWidthMm: input.widthMm,
-        pieceLengthMm: input.lengthMm,
-        rawMaterial: {
-          isActive: true,
-          thicknessMm: input.thicknessMm,
-        },
-      },
-      include: {
-        rawMaterial: {
-          include: {
-            prices: {
-              where: {
-                priceType: materialPriceType as MaterialPriceType,
-                isActive: true,
-              },
-              orderBy: { effectiveFrom: 'desc' },
-            },
-          },
-        },
-      },
+    const masters = await sourceGenericYieldsWithMaterials(this.prisma, {
+      widthMm: input.widthMm,
+      lengthMm: input.lengthMm,
+      thicknessMm: input.thicknessMm,
+      priceType: materialPriceType as MaterialPriceType,
     });
 
     const context = `${input.thicknessMm} mm / ${input.widthMm}×${input.lengthMm}`;
@@ -370,11 +390,7 @@ export class CostCalculationService {
 
     const master = masters[0];
     const material = master.rawMaterial;
-    const currentPrice = selectCurrentMaterialPrice(
-      material.prices,
-      materialPriceType as MaterialPriceType,
-      now,
-    );
+    const currentPrice = resolveCostMaterialPrice(material.prices, now);
     if (!currentPrice) {
       throw new SupurgelikRawMaterialPriceMissingException(
         material.code,
@@ -479,23 +495,24 @@ export class CostCalculationService {
     },
     now: Date = new Date(),
   ) {
+    return this.runWithSource(() => this.computeSupurgelikMdfCosts(input, now));
+  }
+
+  private async computeSupurgelikMdfCosts(
+    input: {
+      productCode: SupurgelikProductCode;
+      materialPriceType?: string | null;
+    },
+    now: Date,
+  ) {
     const materialPriceType = resolveCitaMaterialPriceType(input.materialPriceType);
     if (!SUPURGELIK_PRODUCT_CODES.includes(input.productCode)) {
       throw new BadRequestException('Geçersiz Süpürgelik productCode.');
     }
 
-    const group = await this.prisma.productGroup.findUnique({
-      where: { code: 'SUPURGELIK' },
-    });
+    const group = await sourceGroupByCode(this.prisma, 'SUPURGELIK');
     const product = group
-      ? await this.prisma.product.findUnique({
-          where: {
-            productGroupId_code: {
-              productGroupId: group.id,
-              code: input.productCode,
-            },
-          },
-        })
+      ? await sourceProductByGroupCode(this.prisma, group.id, input.productCode)
       : null;
     if (!group?.isActive || !product?.isActive) {
       throw new NotFoundException(`Aktif Süpürgelik ürünü bulunamadı: ${input.productCode}`);
@@ -516,21 +533,12 @@ export class CostCalculationService {
       group.id,
     );
 
-    const productSizes = await this.prisma.productSize.findMany({
-      select: { widthMm: true, lengthMm: true },
-    });
+    const productSizes = await sourceAllProductSizes(this.prisma);
     const productSizeKeys = new Set(
       productSizes.map((size) => `${size.widthMm}|${size.lengthMm}`),
     );
 
-    const genericCandidates = await this.prisma.productionYield.findMany({
-      where: {
-        productId: null,
-        isActive: true,
-        rawMaterial: { isActive: true },
-      },
-      include: { rawMaterial: true },
-    });
+    const genericCandidates = await sourceGenericYieldsWithMaterials(this.prisma);
 
     // Generic ProductionYield üzerinde ürün grubu FK'si yoktur. Süpürgelik ayrımı,
     // DB ProductSize eşleşmesi ve parçanın MDF tabaka boyuna tam oturmasıyla yapılır.
@@ -555,8 +563,8 @@ export class CostCalculationService {
     }
 
     masters.sort((a, b) => {
-      const thicknessOrder = toDecimal(a.rawMaterial.thicknessMm).comparedTo(
-        toDecimal(b.rawMaterial.thicknessMm),
+      const thicknessOrder = toDecimal(String(a.rawMaterial.thicknessMm)).comparedTo(
+        toDecimal(String(b.rawMaterial.thicknessMm)),
       );
       return (
         thicknessOrder ||
@@ -683,6 +691,22 @@ export class CostCalculationService {
     now: Date = new Date(),
     materialPriceTypeInput?: string | null,
   ) {
+    return this.runWithSource(() =>
+      this.computeAyarliPervazMdfCost(input, now, materialPriceTypeInput),
+    );
+  }
+
+  private async computeAyarliPervazMdfCost(
+    input: {
+      productCode: string;
+      thicknessMm: number;
+      widthMm: number;
+      lengthMm: number;
+      rawMaterialCode?: string;
+    },
+    now: Date,
+    materialPriceTypeInput?: string | null,
+  ) {
     const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     if (input.productCode !== 'AYARLI_PERVAZ') {
       throw new BadRequestException(
@@ -690,18 +714,9 @@ export class CostCalculationService {
       );
     }
 
-    const group = await this.prisma.productGroup.findUnique({
-      where: { code: 'PERVAZ' },
-    });
+    const group = await sourceGroupByCode(this.prisma, 'PERVAZ');
     const product = group
-      ? await this.prisma.product.findUnique({
-          where: {
-            productGroupId_code: {
-              productGroupId: group.id,
-              code: 'AYARLI_PERVAZ',
-            },
-          },
-        })
+      ? await sourceProductByGroupCode(this.prisma, group.id, 'AYARLI_PERVAZ')
       : null;
     if (!group || !group.isActive || !product || !product.isActive) {
       throw new NotFoundException('Aktif ürün bulunamadı: AYARLI_PERVAZ');
@@ -731,10 +746,10 @@ export class CostCalculationService {
       materialPriceType,
     );
 
-    const kilcikMaterial = await this.prisma.rawMaterial.findUnique({
-      where: { code: AYARLI_PERVAZ_KILCIK_MATERIAL_CODE },
-      include: { prices: true },
-    });
+    const kilcikMaterial = await sourceMaterialWithPrices(
+      this.prisma,
+      AYARLI_PERVAZ_KILCIK_MATERIAL_CODE,
+    );
     if (!kilcikMaterial || !kilcikMaterial.isActive) {
       throw new NotFoundException(
         `Aktif ham madde bulunamadı: ${AYARLI_PERVAZ_KILCIK_MATERIAL_CODE}`,
@@ -757,35 +772,26 @@ export class CostCalculationService {
       await this.extraCostsService.listForProductGroup('PERVAZ', now),
     );
 
-    const rowExceptions = await this.prisma.pricingRowException.findMany({
-      where: {
-        productId: product.id,
-        thicknessMm: input.thicknessMm,
-        widthMm: input.widthMm,
-        lengthMm: input.lengthMm,
-        isActive: true,
-      },
+    const rowExceptions = await sourceRowExceptions(this.prisma, {
+      productId: product.id,
+      thicknessMm: input.thicknessMm,
+      widthMm: input.widthMm,
+      lengthMm: input.lengthMm,
     });
-    const productSettings = await this.prisma.pricingSetting.findMany({
-      where: {
-        productId: product.id,
-        productGroupId: null,
-        isActive: true,
-      },
+    const productSettings = await sourcePricingSettings(this.prisma, {
+      productId: product.id,
+      productGroupId: null,
+      isActive: true,
     });
-    const groupSettings = await this.prisma.pricingSetting.findMany({
-      where: {
-        productGroupId: group.id,
-        productId: null,
-        isActive: true,
-      },
+    const groupSettings = await sourcePricingSettings(this.prisma, {
+      productGroupId: group.id,
+      productId: null,
+      isActive: true,
     });
-    const globalSettings = await this.prisma.pricingSetting.findMany({
-      where: {
-        productGroupId: null,
-        productId: null,
-        isActive: true,
-      },
+    const globalSettings = await sourcePricingSettings(this.prisma, {
+      productGroupId: null,
+      productId: null,
+      isActive: true,
     });
     const productSizeId = await findProductSizeId(
       this.prisma,
@@ -874,6 +880,13 @@ export class CostCalculationService {
     now: Date = new Date(),
     materialPriceTypeInput?: string | null,
   ) {
+    return this.runWithSource(() => this.computeAyarliPervazMdfCosts(now, materialPriceTypeInput));
+  }
+
+  private async computeAyarliPervazMdfCosts(
+    now: Date,
+    materialPriceTypeInput?: string | null,
+  ) {
     const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     const { rows: contexts } = await discoverActiveProductMasterRows(
       this.prisma,
@@ -915,6 +928,15 @@ export class CostCalculationService {
     now: Date = new Date(),
     materialPriceTypeInput?: string | null,
   ) {
+    return this.runWithSource(() =>
+      this.computeDekoratifPervazCosts(now, materialPriceTypeInput),
+    );
+  }
+
+  private async computeDekoratifPervazCosts(
+    now: Date,
+    materialPriceTypeInput?: string | null,
+  ) {
     const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
     const { rows: contexts } = await discoverActiveProductMasterRows(
       this.prisma,
@@ -946,6 +968,15 @@ export class CostCalculationService {
   /** Dekoratif Pervaz Geniş Kılçık — yalnız Excel AC96–AC97 master satırları. */
   async getDekoratifGenisKilcikCosts(
     now: Date = new Date(),
+    materialPriceTypeInput?: string | null,
+  ) {
+    return this.runWithSource(() =>
+      this.computeDekoratifGenisKilcikCosts(now, materialPriceTypeInput),
+    );
+  }
+
+  private async computeDekoratifGenisKilcikCosts(
+    now: Date,
     materialPriceTypeInput?: string | null,
   ) {
     const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
@@ -989,27 +1020,15 @@ export class CostCalculationService {
     materialPriceTypeInput?: string | null,
   ) {
     const materialPriceType = resolveCitaMaterialPriceType(materialPriceTypeInput);
-    const group = await this.prisma.productGroup.findUnique({
-      where: { code: 'PERVAZ' },
-    });
+    const group = await sourceGroupByCode(this.prisma, 'PERVAZ');
     const product = group
-      ? await this.prisma.product.findUnique({
-          where: {
-            productGroupId_code: {
-              productGroupId: group.id,
-              code: productCode,
-            },
-          },
-        })
+      ? await sourceProductByGroupCode(this.prisma, group.id, productCode)
       : null;
     if (!group?.isActive || !product?.isActive) {
       throw new NotFoundException(`Aktif ürün bulunamadı: ${productCode}`);
     }
 
-    const mainMaterial = await this.prisma.rawMaterial.findUnique({
-      where: { code: context.materialCode },
-      include: { prices: true },
-    });
+    const mainMaterial = await sourceMaterialWithPrices(this.prisma, context.materialCode);
     if (!mainMaterial?.isActive) {
       throw new NotFoundException(
         `Aktif ham madde bulunamadı: ${context.materialCode}`,
@@ -1024,10 +1043,10 @@ export class CostCalculationService {
       pieceLengthMm: context.pieceLengthMm,
     });
 
-    const kilcikMaterial = await this.prisma.rawMaterial.findUnique({
-      where: { code: AYARLI_PERVAZ_KILCIK_MATERIAL_CODE },
-      include: { prices: true },
-    });
+    const kilcikMaterial = await sourceMaterialWithPrices(
+      this.prisma,
+      AYARLI_PERVAZ_KILCIK_MATERIAL_CODE,
+    );
     if (!kilcikMaterial?.isActive) {
       throw new NotFoundException(
         `Aktif ham madde bulunamadı: ${AYARLI_PERVAZ_KILCIK_MATERIAL_CODE}`,
@@ -1044,35 +1063,26 @@ export class CostCalculationService {
       await this.extraCostsService.listForProductGroup('PERVAZ', now),
     );
 
-    const rowExceptions = await this.prisma.pricingRowException.findMany({
-      where: {
-        productId: product.id,
-        thicknessMm: context.thicknessMm,
-        widthMm: context.pieceWidthMm,
-        lengthMm: context.pieceLengthMm,
-        isActive: true,
-      },
+    const rowExceptions = await sourceRowExceptions(this.prisma, {
+      productId: product.id,
+      thicknessMm: context.thicknessMm,
+      widthMm: context.pieceWidthMm,
+      lengthMm: context.pieceLengthMm,
     });
-    const productSettings = await this.prisma.pricingSetting.findMany({
-      where: {
-        productId: product.id,
-        productGroupId: null,
-        isActive: true,
-      },
+    const productSettings = await sourcePricingSettings(this.prisma, {
+      productId: product.id,
+      productGroupId: null,
+      isActive: true,
     });
-    const groupSettings = await this.prisma.pricingSetting.findMany({
-      where: {
-        productGroupId: group.id,
-        productId: null,
-        isActive: true,
-      },
+    const groupSettings = await sourcePricingSettings(this.prisma, {
+      productGroupId: group.id,
+      productId: null,
+      isActive: true,
     });
-    const globalSettings = await this.prisma.pricingSetting.findMany({
-      where: {
-        productGroupId: null,
-        productId: null,
-        isActive: true,
-      },
+    const globalSettings = await sourcePricingSettings(this.prisma, {
+      productGroupId: null,
+      productId: null,
+      isActive: true,
     });
     const productSizeId = await findProductSizeId(
       this.prisma,
@@ -1165,10 +1175,7 @@ export class CostCalculationService {
     code: string,
     thicknessMm: number,
   ) {
-    const material = await this.prisma.rawMaterial.findUnique({
-      where: { code },
-      include: { prices: true },
-    });
+    const material = await sourceMaterialWithPrices(this.prisma, code);
     if (!material?.isActive) {
       throw new NotFoundException(`Aktif ham madde bulunamadı: ${code}`);
     }
@@ -1185,22 +1192,10 @@ export class CostCalculationService {
     widthMm: number,
     lengthMm: number,
   ) {
-    const yields = await this.prisma.productionYield.findMany({
-      where: {
-        productId: null,
-        isActive: true,
-        pieceWidthMm: widthMm,
-        pieceLengthMm: lengthMm,
-        rawMaterial: {
-          isActive: true,
-          thicknessMm,
-        },
-      },
-      include: {
-        rawMaterial: {
-          include: { prices: true },
-        },
-      },
+    const yields = await sourceGenericYieldsWithMaterials(this.prisma, {
+      widthMm,
+      lengthMm,
+      thicknessMm,
     });
 
     if (yields.length > 1) {
@@ -1212,10 +1207,7 @@ export class CostCalculationService {
       return yields[0].rawMaterial;
     }
 
-    const candidates = await this.prisma.rawMaterial.findMany({
-      where: { isActive: true, thicknessMm },
-      include: { prices: true },
-    });
+    const candidates = await sourceMaterialsByThickness(this.prisma, thicknessMm);
     if (candidates.length === 0) {
       throw new NotFoundException(
         `${thicknessMm} mm için aktif ham madde bulunamadı (ana pervaz).`,
@@ -1232,20 +1224,14 @@ export class CostCalculationService {
   private requireSheetPrice(
     material: {
       code: string;
-      prices: Parameters<typeof selectCurrentMaterialPrice>[0];
+      prices: Parameters<typeof resolveCostMaterialPrice>[0];
     },
     now: Date,
-    materialPriceType: CitaMaterialPriceType,
+    _materialPriceType: CitaMaterialPriceType,
   ): string {
-    const current = selectCurrentMaterialPrice(
-      material.prices,
-      materialPriceType as MaterialPriceType,
-      now,
-    );
+    const current = resolveCostMaterialPrice(material.prices, now);
     if (!current) {
-      throw new NotFoundException(
-        `${material.code} için şu an geçerli ${materialPriceType} alış fiyatı bulunamadı.`,
-      );
+      throw new NotFoundException(missingCostMaterialPriceMessage(material.code));
     }
     return current.price.toString();
   }
@@ -1254,14 +1240,13 @@ export class CostCalculationService {
     productId: string,
     sizes: Array<{ widthCm: number; lengthCm: number }>,
   ): Promise<Map<string, CashOverrideSnapshot>> {
-    const productSizes = await this.prisma.productSize.findMany({
-      where: {
-        OR: sizes.map((s) => ({
-          widthMm: s.widthCm * 10,
-          lengthMm: s.lengthCm * 10,
-        })),
-      },
-    });
+    const productSizes = await sourceProductSizesByMm(
+      this.prisma,
+      sizes.map((s) => ({
+        widthMm: s.widthCm * 10,
+        lengthMm: s.lengthCm * 10,
+      })),
+    );
     if (productSizes.length === 0) {
       return new Map();
     }
@@ -1270,13 +1255,11 @@ export class CostCalculationService {
       productSizes.map((s) => [s.id, `${s.widthMm / 10}x${s.lengthMm / 10}`]),
     );
 
-    const overrides = await this.prisma.priceOverride.findMany({
-      where: {
-        productId,
-        isActive: true,
-        productSizeId: { in: productSizes.map((s) => s.id) },
-      },
-    });
+    const overrides = await sourcePriceOverridesForSizes(
+      this.prisma,
+      productId,
+      productSizes.map((s) => s.id),
+    );
 
     const bySize = new Map<string, CashOverrideSnapshot>();
     for (const override of overrides) {
@@ -1298,32 +1281,23 @@ export class CostCalculationService {
     profitRate: string;
     cardMarkupRate: string | null;
   }> {
-    const group = await this.prisma.productGroup.findUnique({
-      where: { code: 'door_frame' },
-    });
+    const group = await sourceGroupByCode(this.prisma, 'door_frame');
     if (!group || !group.isActive) {
       throw new NotFoundException('Ürün grubu bulunamadı: door_frame');
     }
 
-    const product = await this.prisma.product.findUnique({
-      where: {
-        productGroupId_code: {
-          productGroupId: group.id,
-          code: variant,
-        },
-      },
-    });
+    const product = await sourceProductByGroupCode(this.prisma, group.id, variant);
     if (!product || !product.isActive) {
       throw new NotFoundException(`Kapı Kasası ürünü bulunamadı: ${variant}`);
     }
 
-    const setting = await this.prisma.pricingSetting.findFirst({
-      where: {
+    const setting = (
+      await sourcePricingSettings(this.prisma, {
         productId: product.id,
         productGroupId: null,
         isActive: true,
-      },
-    });
+      })
+    )[0];
     if (!setting) {
       throw new NotFoundException(
         `${variant} için aktif Product-level PricingSetting bulunamadı.`,
@@ -1336,12 +1310,10 @@ export class CostCalculationService {
       throw new NotFoundException(`${variant} için kâr oranı (profitRate) tanımlı değil.`);
     }
 
-    const groupSettings = await this.prisma.pricingSetting.findMany({
-      where: {
-        productGroupId: group.id,
-        productId: null,
-        isActive: true,
-      },
+    const groupSettings = await sourcePricingSettings(this.prisma, {
+      productGroupId: group.id,
+      productId: null,
+      isActive: true,
     });
 
     return {
@@ -1419,12 +1391,10 @@ export class CostCalculationService {
   private async resolveSupurgelikDuzPricing(
     productGroupId: string,
   ): Promise<SupurgelikDuzPricingContext> {
-    const settings = await this.prisma.pricingSetting.findMany({
-      where: {
-        productGroupId,
-        productId: null,
-        isActive: true,
-      },
+    const settings = await sourcePricingSettings(this.prisma, {
+      productGroupId,
+      productId: null,
+      isActive: true,
     });
     if (settings.length > 1) {
       throw new BadRequestException(
@@ -1453,16 +1423,12 @@ export class CostCalculationService {
     productGroupId: string,
     now: Date,
   ): Promise<SupurgelikDecorativeRateMap> {
-    const rows = await this.prisma.pricingThicknessModifier.findMany({
-      where: {
-        productGroupId,
-        modifierType: PricingModifierType.DECORATIVE,
-        isActive: true,
-        effectiveFrom: { lte: now },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
-      },
-      orderBy: { effectiveFrom: 'desc' },
-    });
+    const rows = await sourceThicknessModifiers(
+      this.prisma,
+      productGroupId,
+      PricingModifierType.DECORATIVE,
+      now,
+    );
 
     const byThickness: SupurgelikDecorativeRateMap = new Map();
     for (const row of rows) {

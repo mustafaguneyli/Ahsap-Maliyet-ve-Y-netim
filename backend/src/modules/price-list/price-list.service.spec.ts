@@ -6,6 +6,24 @@ import {
 import { PriceListService } from './price-list.service';
 
 describe('toMissingReasons', () => {
+  it('Firestore sonrası da MDF/NET/kart/yayın/recipe nedenlerini korur', () => {
+    expect(
+      toMissingReasons([
+        'RAW_MATERIAL_PRICE_MISSING',
+        'PRODUCTION_YIELD_MISSING',
+        'CARD_MARKUP_RATE_MISSING',
+        'CITA_PUBLISHED_PRICE_MISSING',
+        'RECIPE_MISSING',
+      ]),
+    ).toEqual([
+      PRICE_LIST_REASON_LABELS.RAW_MATERIAL_PRICE_MISSING,
+      PRICE_LIST_REASON_LABELS.PRODUCTION_YIELD_MISSING,
+      PRICE_LIST_REASON_LABELS.CARD_MARKUP_MISSING,
+      PRICE_LIST_REASON_LABELS.PUBLISHED_PRICE_MISSING,
+      PRICE_LIST_REASON_LABELS.RECIPE_MISSING,
+    ]);
+  });
+
   it('kodları Türkçe display metne çevirir ve tekrarlamaz', () => {
     expect(
       toMissingReasons([
@@ -447,6 +465,37 @@ describe('PriceListService', () => {
     expect(cashOnly.cardStatus).toBe('MISSING_SOURCE');
     expect(cashOnly.cardMissingReasons).toEqual([
       PRICE_LIST_REASON_LABELS.CARD_MARKUP_MISSING,
+    ]);
+  });
+
+  it('eksik kaynak için 0 veya 0.00 TL uydurmaz', async () => {
+    const { service } = build({
+      door: {
+        rows: [
+          {
+            displayName: '10×210',
+            productSizeId: 's-10',
+            pricing: {
+              profitRate: '20',
+              publishedCashPrice: '0',
+              publishedCardPrice: '0.00',
+              cashSalePrice: '0',
+              cardSalePrice: '0.00',
+              statusCode: 'RAW_MATERIAL_PRICE_MISSING',
+            },
+          },
+        ],
+      },
+    });
+    const result = await service.getPriceList(now);
+    const row = result.groups
+      .find((group) => group.productGroupCode === 'door_frame')!
+      .products[0].subsections[0].rows[0];
+    expect(row.cashSalePrice).toBeNull();
+    expect(row.cardSalePrice).toBeNull();
+    expect(row.status).toBe('MISSING_SOURCE');
+    expect(row.cashMissingReasons).toEqual([
+      PRICE_LIST_REASON_LABELS.RAW_MATERIAL_PRICE_MISSING,
     ]);
   });
 

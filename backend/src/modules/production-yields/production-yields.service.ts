@@ -3,8 +3,13 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { FIRESTORE_COLLECTIONS } from '../../firebase/firestore.collections';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateProductionYieldDto } from './dto/create-production-yield.dto';
@@ -19,6 +24,7 @@ import {
   collectRowUsages,
   type ProductionYieldUsage,
   type YieldUsageProduct,
+  type YieldUsageRow,
 } from './production-yield-usage';
 
 const ENTITY_TYPE = 'ProductionYield';
@@ -82,9 +88,14 @@ export class ProductionYieldsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
   async findAll(query: ListProductionYieldsQueryDto): Promise<ProductionYieldListItem[]> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () => this.findAllFromCache(query));
+    }
     const where: Prisma.ProductionYieldWhereInput = {};
 
     if (query.rawMaterialId) {
@@ -468,6 +479,118 @@ export class ProductionYieldsService {
     if (!Number.isInteger(dto.netQty) || dto.netQty <= 0) {
       throw new BadRequestException('netQty > 0 olmalıdır. NET adet formülle türetilmez.');
     }
+  }
+
+  private findAllFromCache(query: ListProductionYieldsQueryDto): ProductionYieldListItem[] {
+    const cache = currentCatalogCache();
+    if (!cache) {
+      return [];
+    }
+    const groupsById = new Map(
+      cache.collection(FIRESTORE_COLLECTIONS.productGroups).map((row) => [String(row.id), row]),
+    );
+    const products = cache.collection(FIRESTORE_COLLECTIONS.products).map((row) => {
+      const group = groupsById.get(String(row.productGroupId));
+      return {
+        id: String(row.id),
+        code: String(row.code),
+        name: String(row.name),
+        isActive: row.isActive === true,
+        productGroup: {
+          id: String(row.productGroupId),
+          code: String(group?.code ?? ''),
+          name: String(group?.name ?? ''),
+          isActive: group?.isActive === true,
+        },
+      } satisfies YieldUsageProduct;
+    });
+    const productsById = new Map(products.map((product) => [product.id, product]));
+    const recipesById = new Map(
+      cache.collection(FIRESTORE_COLLECTIONS.recipes).map((row) => [String(row.id), row]),
+    );
+    const recipeItemsByYield = new Map<string, YieldUsageRow['recipeItems']>();
+    for (const item of cache.collection(FIRESTORE_COLLECTIONS.recipeItems)) {
+      const yieldId = item.productionYieldId == null ? null : String(item.productionYieldId);
+      if (!yieldId) continue;
+      const recipe = recipesById.get(String(item.recipeId));
+      const product = recipe ? productsById.get(String(recipe.productId)) : undefined;
+      if (!product) continue;
+      const list = recipeItemsByYield.get(yieldId) ?? [];
+      list.push({ recipe: { product } });
+      recipeItemsByYield.set(yieldId, list);
+    }
+    const productSizeKeys = new Set(
+      cache
+        .collection(FIRESTORE_COLLECTIONS.productSizes)
+        .map((size) => `${Number(size.widthMm)}|${Number(size.lengthMm)}`),
+    );
+    const scopedProductIds = new Set(
+      cache
+        .collection(FIRESTORE_COLLECTIONS.productionYields)
+        .filter((row) => row.productId)
+        .map((row) => String(row.productId)),
+    );
+    const genericConsumerProducts = products.filter(
+      (product) => product.isActive && product.productGroup.isActive && !scopedProductIds.has(product.id),
+    );
+
+    const rows = cache.collection(FIRESTORE_COLLECTIONS.productionYields).filter((row) => {
+      if (query.rawMaterialId && String(row.rawMaterialId) !== query.rawMaterialId) return false;
+      if (query.pieceWidth !== undefined && Number(row.pieceWidthMm) !== query.pieceWidth) return false;
+      if (query.pieceLength !== undefined && Number(row.pieceLengthMm) !== query.pieceLength) {
+        return false;
+      }
+      if (query.isActive !== undefined && row.isActive !== query.isActive) return false;
+      if (query.thickness !== undefined) {
+        const material = cache.materialById(String(row.rawMaterialId));
+        if (Number(material?.thicknessMm) !== Number(query.thickness)) return false;
+      }
+      return true;
+    });
+
+    const items = rows.flatMap((row) => {
+      const material = cache.materialById(String(row.rawMaterialId));
+      if (!material) {
+        return [];
+      }
+      const product = row.productId ? productsById.get(String(row.productId)) ?? null : null;
+      const shaped = {
+        id: String(row.id),
+        productId: row.productId == null || row.productId === '' ? null : String(row.productId),
+        rawMaterialId: String(row.rawMaterialId),
+        pieceWidthMm: Number(row.pieceWidthMm),
+        pieceLengthMm: Number(row.pieceLengthMm),
+        netQty: Number(row.netQty),
+        isActive: row.isActive === true,
+        createdAt: cache.asDate(row.createdAt, 'createdAt'),
+        updatedAt: cache.asDate(row.updatedAt, 'updatedAt'),
+        rawMaterial: {
+          id: String(material.id),
+          code: String(material.code),
+          name: String(material.name),
+          thicknessMm: { toString: () => String(material.thicknessMm) },
+          sheetWidthMm: Number(material.sheetWidthMm),
+          sheetLengthMm: Number(material.sheetLengthMm),
+          surfaceType: material.surfaceType == null ? null : String(material.surfaceType),
+          isActive: material.isActive === true,
+        },
+        product,
+        recipeItems: recipeItemsByYield.get(String(row.id)) ?? [],
+      };
+      const usages = collectRowUsages(shaped, { genericConsumerProducts, productSizeKeys });
+      return [this.toListItem(shaped, usages)];
+    });
+
+    const filtered = items.filter((item) => {
+      if (query.productId) {
+        return item.usages.some((usage) => usage.productId === query.productId);
+      }
+      if (query.productGroupId) {
+        return item.usages.some((usage) => usage.productGroupId === query.productGroupId);
+      }
+      return true;
+    });
+    return filtered.sort((a, b) => compareYieldListItems(a, b));
   }
 
   private toListItem(

@@ -1,4 +1,7 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
 import { decimalToString, toDecimal } from '../../common/decimal/decimal.util';
 import {
   calculateCitaCutRuleNet,
@@ -35,13 +38,20 @@ export type CitaNetResult = {
 
 @Injectable()
 export class CitaNetService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
+  ) {}
 
   /**
    * Aktif CITA product-scoped MASTER varsa onu kullanır; yoksa cut rule.
    * Custom ölçü ProductSize / ProductionYield / Recipe yazmaz.
    */
   async resolveNet(query: CitaNetQueryDto): Promise<CitaNetResult> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, () => this.resolveNet(query));
+    }
     const thicknessMm = parseCitaThicknessMm(query.thicknessMm);
     const widthMm = parseCitaWidthMm(query.widthMm);
     const lengthMm = parseCitaLengthMm(query.lengthMm);
@@ -80,27 +90,19 @@ export class CitaNetService {
   }
 
   private async requireCitaContext(materialCode: string) {
-    const group = await this.prisma.productGroup.findUnique({
-      where: { code: CITA_PRODUCT_GROUP_SEED.code },
-    });
+    const { sourceGroupByCode, sourceProductByGroupCode, sourceMaterialByCodeExact } = await import(
+      '../../data-store/firestore-source-bridge'
+    );
+    const group = await sourceGroupByCode(this.prisma, CITA_PRODUCT_GROUP_SEED.code);
     const product = group
-      ? await this.prisma.product.findUnique({
-          where: {
-            productGroupId_code: {
-              productGroupId: group.id,
-              code: CITA_PRODUCT_SEED.code,
-            },
-          },
-        })
+      ? await sourceProductByGroupCode(this.prisma, group.id, CITA_PRODUCT_SEED.code)
       : null;
 
     if (!group?.isActive || !product?.isActive) {
       throw new NotFoundException('Aktif CITA ürünü bulunamadı.');
     }
 
-    const material = await this.prisma.rawMaterial.findUnique({
-      where: { code: materialCode },
-    });
+    const material = await sourceMaterialByCodeExact(this.prisma, materialCode);
     if (!material?.isActive) {
       throw new NotFoundException(`Aktif ham madde bulunamadı: ${materialCode}`);
     }
@@ -137,15 +139,26 @@ export class CitaNetService {
       return null;
     }
 
-    const masters = await this.prisma.productionYield.findMany({
-      where: {
-        productId: input.productId,
-        rawMaterialId: input.rawMaterialId,
-        pieceWidthMm,
-        pieceLengthMm: CITA_CUT_RULE.pieceLengthMm,
-        isActive: true,
-      },
-    });
+    const { currentCatalogCache } = await import('../../data-store/firestore-catalog-cache');
+    const cache = currentCatalogCache();
+    const masters = cache
+      ? cache
+          .productYields(input.productId)
+          .filter(
+            (row) =>
+              row.rawMaterialId === input.rawMaterialId &&
+              Number(row.pieceWidthMm) === pieceWidthMm &&
+              Number(row.pieceLengthMm) === CITA_CUT_RULE.pieceLengthMm,
+          )
+      : await this.prisma.productionYield.findMany({
+          where: {
+            productId: input.productId,
+            rawMaterialId: input.rawMaterialId,
+            pieceWidthMm,
+            pieceLengthMm: CITA_CUT_RULE.pieceLengthMm,
+            isActive: true,
+          },
+        });
 
     if (masters.length > 1) {
       throw new BadRequestException(
@@ -158,11 +171,12 @@ export class CitaNetService {
     if (!master) {
       return null;
     }
-    if (!Number.isInteger(master.netQty) || master.netQty < 1) {
+    const netQty = Number(master.netQty);
+    if (!Number.isInteger(netQty) || netQty < 1) {
       throw new BadRequestException(
         `CITA MASTER NET adedi geçersiz: ${input.materialCode} / ${pieceWidthMm}×${CITA_CUT_RULE.pieceLengthMm}.`,
       );
     }
-    return master.netQty;
+    return netQty;
   }
 }

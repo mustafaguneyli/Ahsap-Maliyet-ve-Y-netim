@@ -1,5 +1,6 @@
 import { IsIn, IsNotEmpty, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { transformDecimalString } from '../pricing-setting.validation';
 
 /** CITA group-scope kart/taksit oranı (%). */
 export class UpdateCitaPricingSettingDto {
@@ -12,8 +13,6 @@ export class UpdateCitaPricingSettingDto {
   @Matches(/^\d+(\.\d{1,4})?$/, {
     message: 'Kart / taksit farkı geçerli bir Decimal olmalıdır (örn. 20 veya 18.5).',
   })
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.trim().replace(',', '.') : value,
-  )
+  @Transform(transformDecimalString)
   cardMarkupRate!: string;
 }

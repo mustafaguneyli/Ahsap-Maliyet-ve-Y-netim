@@ -349,8 +349,16 @@ describe('GenericRecipeService catalog save', () => {
                     isActive: true,
                     prices: [
                       {
-                        id: 'price-1',
+                        id: 'price-cash',
                         priceType: 'CASH',
+                        price: { toString: () => '2000' },
+                        effectiveFrom: new Date('2020-01-01'),
+                        effectiveTo: null,
+                        isActive: true,
+                      },
+                      {
+                        id: 'price-1',
+                        priceType: 'CARD_INSTALLMENT',
                         price: { toString: () => '3500' },
                         effectiveFrom: new Date('2020-01-01'),
                         effectiveTo: null,
@@ -370,27 +378,111 @@ describe('GenericRecipeService catalog save', () => {
     prisma.pricingSetting.findFirst.mockResolvedValue(null);
     prisma.extraCostValue.findMany.mockResolvedValue([
       {
+        id: 'e-group',
+        extraCostTypeId: 't-labor',
         productId: null,
         productGroupId: 'g1',
         amount: { toString: () => '99' },
         calculationMode: 'FIXED',
+        isActive: true,
+        effectiveFrom: new Date('2020-01-01T00:00:00.000Z'),
+        effectiveTo: null,
         extraCostType: { code: 'LABOR', name: 'İşçilik', isActive: true },
       },
       {
+        id: 'e-product',
+        extraCostTypeId: 't-labor',
         productId: 'p1',
         productGroupId: null,
         amount: { toString: () => '10' },
         calculationMode: 'FIXED',
+        isActive: true,
+        effectiveFrom: new Date('2020-01-01T00:00:00.000Z'),
+        effectiveTo: null,
         extraCostType: { code: 'LABOR', name: 'İşçilik', isActive: true },
       },
     ]);
 
     const result = await service.listCostRows('MUTFAK', 'CASH', now);
+    expect(result.materialPriceType).toBe('CARD_INSTALLMENT');
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0]!.productionCost).toBe(
       '126.6666666666666666666666667',
     );
     expect(result.rows[0]!.extraCostTotal).toBe('10');
+    expect(result.rows[0]!.materialCosts[0]!.unitPrice).toBe('3500');
+  });
+
+  it('CARD yokken CASH mevcutsa PER_SHEET_YIELD hesaplamaz', async () => {
+    const { service, prisma } = build();
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    prisma.productGroup.findUnique.mockResolvedValue({
+      id: 'g1',
+      code: 'MUTFAK',
+      name: 'Mutfak',
+      calculatorType: CalculatorType.GENERIC_RECIPE,
+      isActive: true,
+      products: [
+        {
+          id: 'p1',
+          code: 'X',
+          name: 'X',
+          unit: 'ADET',
+          isActive: true,
+          recipes: [
+            {
+              id: 'r1',
+              isActive: true,
+              productSizeId: 's1',
+              productSize: {
+                widthMm: 100,
+                lengthMm: 2100,
+                displayName: '10x210',
+              },
+              items: [
+                {
+                  sortOrder: 0,
+                  rawMaterialId: 'mat-18',
+                  quantity: { toString: () => '1' },
+                  calculationMode: 'PER_SHEET_YIELD',
+                  quantityUnit: null,
+                  wasteRate: null,
+                  productionYieldId: 'y1',
+                  rawMaterial: {
+                    id: 'mat-18',
+                    code: 'MDF-18',
+                    name: '18',
+                    priceBasis: 'SHEET',
+                    isActive: true,
+                    prices: [
+                      {
+                        id: 'price-1',
+                        priceType: 'CASH',
+                        price: { toString: () => '3500' },
+                        effectiveFrom: new Date('2020-01-01'),
+                        effectiveTo: null,
+                        isActive: true,
+                      },
+                    ],
+                  },
+                  productionYield: { netQty: 30, isActive: true },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    prisma.pricingSetting.findFirst.mockResolvedValue(null);
+    prisma.extraCostValue.findMany.mockResolvedValue([]);
+
+    const result = await service.listCostRows('MUTFAK', 'CASH', now);
+    expect(result.materialPriceType).toBe('CARD_INSTALLMENT');
+    expect(result.rows[0]!.status).toBe('MISSING_SOURCE');
+    expect(result.rows[0]!.productionCost).toBeNull();
+    expect(result.rows[0]!.missingSources.join(' ')).toMatch(
+      /MDF kart\/taksitli alış fiyatı tanımlı değil/,
+    );
   });
 });
 

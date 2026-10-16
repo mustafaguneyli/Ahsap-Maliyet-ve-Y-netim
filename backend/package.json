@@ -7,12 +7,22 @@
     "build": "nest build",
     "start": "nest start",
     "start:dev": "nest start --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "node dist/src/main.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "prisma:seed": "ts-node --transpile-only prisma/seed.ts",
+    "firebase:deploy:rules": "npx firebase-tools deploy --only firestore:rules,firestore:indexes --config ../firebase.json",
+    "firestore:migrate": "ts-node --transpile-only -r dotenv/config scripts/migrate-postgres-to-firestore.ts",
+    "firestore:inspect": "ts-node --transpile-only -r dotenv/config scripts/inspect-firestore-collections.ts",
+    "firestore:unique-guards": "ts-node --transpile-only -r dotenv/config scripts/backfill-firestore-unique-guards.ts",
+    "firestore:verify-invariants": "ts-node --transpile-only -r dotenv/config scripts/verify-firestore-invariants.ts",
+    "firestore:compare": "ts-node --transpile-only -r dotenv/config scripts/compare-postgres-firestore.ts",
+    "firestore:shadow": "ts-node --transpile-only -r dotenv/config scripts/shadow-compare-calculators.ts",
+    "firestore:backup-pre-cutover": "ts-node --transpile-only -r dotenv/config scripts/backup-pg-pre-cutover.ts",
+    "firestore:write-acceptance": "ts-node --transpile-only -r dotenv/config scripts/firestore-write-acceptance.ts",
+    "firestore:cutover": "ts-node --transpile-only -r dotenv/config scripts/apply-cutover.ts",
     "test": "jest"
   },
   "prisma": {
@@ -27,6 +37,8 @@
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
     "decimal.js": "^10.6.0",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^13.10.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
@@ -44,7 +56,11 @@
     "typescript": "^5.9.2"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
     "rootDir": "src",
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {

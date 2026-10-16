@@ -3,9 +3,14 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { MaterialPriceType, Prisma, RawMaterial } from '@prisma/client';
 import { decimalToPrisma, toDecimal } from '../../common/decimal/decimal.util';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { FIRESTORE_COLLECTIONS } from '../../firebase/firestore.collections';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { CreateRawMaterialDto } from './dto/create-raw-material.dto';
@@ -45,9 +50,14 @@ export class RawMaterialsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
   async findAll(query: ListRawMaterialsQueryDto): Promise<RawMaterialListItem[]> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () => this.findAllFromCache(query));
+    }
     const where: Prisma.RawMaterialWhereInput = {};
 
     if (query.isActive !== undefined) {
@@ -86,6 +96,15 @@ export class RawMaterialsService {
   }
 
   async findOne(id: string): Promise<RawMaterialListItem> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () => {
+        const item = this.findAllFromCache({}).find((row) => row.id === id);
+        if (!item) {
+          throw new NotFoundException(`Ham madde bulunamadı: ${id}`);
+        }
+        return item;
+      });
+    }
     const material = await this.prisma.rawMaterial.findUnique({
       where: { id },
       include: {
@@ -461,6 +480,72 @@ export class RawMaterialsService {
       throw new BadRequestException('Geçerlilik tarihi geçersiz.');
     }
     return date;
+  }
+
+  private findAllFromCache(query: ListRawMaterialsQueryDto): RawMaterialListItem[] {
+    const cache = currentCatalogCache();
+    if (!cache) {
+      return [];
+    }
+    const search = query.search?.trim().toLowerCase();
+    const codeFilter = query.code?.trim().toLowerCase();
+    const nameFilter = query.name?.trim().toLowerCase();
+    const rows = cache
+      .collection(FIRESTORE_COLLECTIONS.rawMaterials)
+      .filter((row) => {
+        if (query.isActive !== undefined && row.isActive !== query.isActive) {
+          return false;
+        }
+        if (query.thicknessMm !== undefined && Number(row.thicknessMm) !== Number(query.thicknessMm)) {
+          return false;
+        }
+        const code = String(row.code).toLowerCase();
+        const name = String(row.name).toLowerCase();
+        if (search) {
+          return code.includes(search) || name.includes(search);
+        }
+        if (codeFilter && !code.includes(codeFilter)) {
+          return false;
+        }
+        if (nameFilter && !name.includes(nameFilter)) {
+          return false;
+        }
+        return true;
+      })
+      .slice()
+      .sort(
+        (a, b) =>
+          Number(a.thicknessMm) - Number(b.thicknessMm) ||
+          String(a.name).localeCompare(String(b.name), 'tr'),
+      );
+
+    return rows.map((row) => {
+      const prices = cache
+        .pricesFor(String(row.id))
+        .filter((price) => price.isActive && price.effectiveTo == null)
+        .sort((a, b) => b.effectiveFrom.getTime() - a.effectiveFrom.getTime());
+      const cash = prices.find((p) => p.priceType === MaterialPriceType.CASH);
+      const card = prices.find((p) => p.priceType === MaterialPriceType.CARD_INSTALLMENT);
+      const lastMs = prices.length
+        ? Math.max(...prices.map((p) => p.effectiveFrom.getTime()))
+        : null;
+      return {
+        id: String(row.id),
+        code: String(row.code),
+        name: String(row.name),
+        thicknessMm: String(row.thicknessMm),
+        sheetWidthMm: Number(row.sheetWidthMm),
+        sheetLengthMm: Number(row.sheetLengthMm),
+        surfaceType: row.surfaceType == null ? null : String(row.surfaceType),
+        supplierName: row.supplierName == null ? null : String(row.supplierName),
+        isActive: row.isActive === true,
+        cashPrice: cash ? cash.price.toString() : null,
+        cardInstallmentPrice: card ? card.price.toString() : null,
+        lastPriceUpdatedAt: lastMs ? new Date(lastMs).toISOString() : null,
+        createdAt: cache.asDate(row.createdAt, 'createdAt').toISOString(),
+        updatedAt: cache.asDate(row.updatedAt, 'updatedAt').toISOString(),
+      };
+    });
   }
 
   private toListItem(

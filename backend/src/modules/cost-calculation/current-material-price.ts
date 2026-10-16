@@ -1,4 +1,11 @@
 import { MaterialPriceType, Prisma } from '@prisma/client';
+import { isCurrentlyEffective } from '../../firebase/firestore-dates';
+
+/** Üretim maliyeti ham madde alış tipi. Env ile değiştirilmez. */
+export const COST_MATERIAL_PRICE_TYPE = MaterialPriceType.CARD_INSTALLMENT;
+
+export const MISSING_COST_MATERIAL_PRICE =
+  'MDF kart/taksitli alış fiyatı tanımlı değil';
 
 export type MaterialPriceRow = {
   id: string;
@@ -28,10 +35,17 @@ export function selectCurrentMaterialPrice(
       (p) =>
         p.isActive &&
         p.priceType === priceType &&
-        p.effectiveFrom.getTime() <= now.getTime() &&
-        (p.effectiveTo == null || p.effectiveTo.getTime() > now.getTime()),
+        isCurrentlyEffective(p.effectiveFrom, p.effectiveTo, now),
     )
     .sort((a, b) => b.effectiveFrom.getTime() - a.effectiveFrom.getTime());
 
   return candidates[0] ?? null;
+}
+
+/** Üretim maliyeti için daima CARD_INSTALLMENT. CASH kaydına düşmez. */
+export function resolveCostMaterialPrice(
+  prices: MaterialPriceRow[],
+  now: Date = new Date(),
+): MaterialPriceRow | null {
+  return selectCurrentMaterialPrice(prices, COST_MATERIAL_PRICE_TYPE, now);
 }

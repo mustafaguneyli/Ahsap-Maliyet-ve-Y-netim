@@ -108,10 +108,11 @@ const BANDS = CITA_PUBLISHED_PRICE_BAND_SEEDS.map((seed) => ({
 }));
 
 describe('Çıta MDF alış türü', () => {
-  it('parametre yoksa CARD_INSTALLMENT kullanır', () => {
+  it('parametre yoksa ve CASH gönderilse de CARD_INSTALLMENT kullanır', () => {
     expect(resolveCitaMaterialPriceType(undefined)).toBe('CARD_INSTALLMENT');
     expect(resolveCitaMaterialPriceType(null)).toBe('CARD_INSTALLMENT');
     expect(resolveCitaMaterialPriceType('')).toBe('CARD_INSTALLMENT');
+    expect(resolveCitaMaterialPriceType('CASH')).toBe('CARD_INSTALLMENT');
   });
 
   it('geçersiz alış türünü reddeder', () => {
@@ -122,50 +123,34 @@ describe('Çıta MDF alış türü', () => {
     ['40', 47, 'MASTER' as const],
     ['35', 53, 'CALCULATED_CUT_RULE' as const],
   ])(
-    '14 mm / %s mm NET %s için CASH ve CARD aynı NET, kesim ve işçiliği kullanır',
+    '14 mm / %s mm NET %s için CASH isteği de CARD tabaka fiyatını kullanır',
     async (widthMm, netQty, source) => {
-      const { service, prisma } = buildMdfService(BOTH_PRICES);
+      const { service } = buildMdfService(BOTH_PRICES);
       const production = productionService(service);
       const base = { thicknessMm: '14', widthMm, lengthMm: '2800' };
 
-      const cash = await production.getProductionCost(
+      const cashRequest = await production.getProductionCost(
         { ...base, materialPriceType: 'CASH' },
         NOW,
       );
       const card = await production.getProductionCost(base, NOW);
 
-      expect(prisma.rawMaterial.findUnique).toHaveBeenCalledWith(
-        expect.objectContaining({
-          include: expect.objectContaining({
-            prices: expect.objectContaining({
-              where: expect.objectContaining({ priceType: 'CASH' }),
-            }),
-          }),
-        }),
-      );
-      expect(cash.materialPriceType).toBe('CASH');
-      expect(cash.sheetPrice).toEqual({ priceType: 'CASH', amount: CASH });
-      expect(cash.mdfUnitCost).toBe(toDecimal(CASH).div(String(netQty)).toFixed());
+      expect(cashRequest.materialPriceType).toBe('CARD_INSTALLMENT');
       expect(card.materialPriceType).toBe('CARD_INSTALLMENT');
+      expect(cashRequest.sheetPrice).toEqual({
+        priceType: 'CARD_INSTALLMENT',
+        amount: CARD,
+      });
       expect(card.sheetPrice).toEqual({
         priceType: 'CARD_INSTALLMENT',
         amount: CARD,
       });
-      expect(card.mdfUnitCost).toBe(toDecimal(CARD).div(String(netQty)).toFixed());
-      expect(cash.productionYield).toEqual({ netQty, source });
+      expect(cashRequest.mdfUnitCost).toBe(toDecimal(CARD).div(String(netQty)).toFixed());
+      expect(card.mdfUnitCost).toBe(cashRequest.mdfUnitCost);
+      expect(cashRequest.productionYield).toEqual({ netQty, source });
       expect(card.productionYield).toEqual({ netQty, source });
-      expect(cash.cuttingBatchCost).toBe('250');
-      expect(card.cuttingBatchCost).toBe('250');
-      expect(cash.cuttingUnitCost).toBe(card.cuttingUnitCost);
-      expect(cash.cuttingUnitCost).toBe(toDecimal('250').div('250').toFixed());
-      expect(cash.extraCosts).toEqual(card.extraCosts);
-      expect(cash.productionCost).toBe(
-        toDecimal(cash.mdfUnitCost).plus(cash.extraCostsTotal!).toFixed(),
-      );
-      expect(card.productionCost).toBe(
-        toDecimal(card.mdfUnitCost).plus(card.extraCostsTotal!).toFixed(),
-      );
-      expect(cash.productionCost).not.toBe(card.productionCost);
+      expect(cashRequest.cuttingUnitCost).toBe(card.cuttingUnitCost);
+      expect(cashRequest.productionCost).toBe(card.productionCost);
     },
   );
 
@@ -211,10 +196,14 @@ describe('Çıta MDF alış türü', () => {
     }
   });
 
-  it('CASH yoksa kart fiyatına düşmez', async () => {
-    const { service } = buildMdfService([
-      priceRow(MaterialPriceType.CARD_INSTALLMENT, CARD),
-    ]);
+  it('CARD yokken CASH mevcutsa düşmez', async () => {
+    const { service } = buildMdfService([priceRow(MaterialPriceType.CASH, CASH)]);
+    await expect(
+      service.getMdfCost(
+        { thicknessMm: '14', widthMm: '40', lengthMm: '2800' },
+        NOW,
+      ),
+    ).rejects.toBeInstanceOf(CitaRawMaterialPriceMissingException);
     await expect(
       service.getMdfCost(
         {
@@ -226,28 +215,8 @@ describe('Çıta MDF alış türü', () => {
         NOW,
       ),
     ).rejects.toMatchObject({
-      errorCode: 'RAW_MATERIAL_PRICE_MISSING',
-      materialPriceType: 'CASH',
-      message: `Aktif MDF fiyatı bulunamadı: ${MATERIAL} / CASH`,
-    });
-  });
-
-  it('CARD yoksa peşin fiyata düşmez', async () => {
-    const { service } = buildMdfService([priceRow(MaterialPriceType.CASH, CASH)]);
-    await expect(
-      service.getMdfCost(
-        { thicknessMm: '14', widthMm: '40', lengthMm: '2800' },
-        NOW,
-      ),
-    ).rejects.toBeInstanceOf(CitaRawMaterialPriceMissingException);
-    await expect(
-      service.getMdfCost(
-        { thicknessMm: '14', widthMm: '40', lengthMm: '2800' },
-        NOW,
-      ),
-    ).rejects.toMatchObject({
       materialPriceType: 'CARD_INSTALLMENT',
-      message: `Aktif MDF fiyatı bulunamadı: ${MATERIAL} / CARD_INSTALLMENT`,
+      rawMaterialCode: MATERIAL,
     });
   });
 

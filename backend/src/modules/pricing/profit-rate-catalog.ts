@@ -24,6 +24,11 @@ export async function loadProfitRateCatalog(
   productId: string,
   productGroupId: string,
 ): Promise<ProfitRateCatalog> {
+  const { currentCatalogCache } = await import('../../data-store/firestore-catalog-cache');
+  const { sourceLoadProfitRateCatalog } = await import('../../data-store/firestore-source-bridge');
+  if (currentCatalogCache()) {
+    return sourceLoadProfitRateCatalog(prisma, productId, productGroupId);
+  }
   const [overrides, productSettings, groupSettings, globalSettings] =
     await Promise.all([
       prisma.productPricingOverride.findMany({
@@ -82,6 +87,12 @@ export async function findProductSizeId(
   widthMm: number,
   lengthMm: number,
 ): Promise<string | null> {
+  const { currentCatalogCache } = await import('../../data-store/firestore-catalog-cache');
+  const cache = currentCatalogCache();
+  if (cache) {
+    const size = cache.sizeByMm(widthMm, lengthMm);
+    return size ? String(size.id) : null;
+  }
   const size = await prisma.productSize.findUnique({
     where: { widthMm_lengthMm: { widthMm, lengthMm } },
     select: { id: true },

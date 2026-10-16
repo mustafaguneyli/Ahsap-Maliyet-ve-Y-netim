@@ -94,6 +94,8 @@ cd ../frontend
 npm run build
 ```
 
+Cloud Run ve Firebase Hosting env listesi: `docs/cloud-deployment.md`. Secret JSON image içine kopyalanmaz. CORS `*` kullanılmaz.
+
 ## Dizinler
 
 - `backend/src/calculation-engine/` — saf calculator'lar, resolver yardımcıları ve golden fixture/testler

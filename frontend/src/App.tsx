@@ -1,5 +1,13 @@
 import { useEffect, useState } from 'react';
 import './App.css';
+import { LoginPage } from './pages/login-page';
+import './pages/login-page.css';
+import {
+  setUnauthorizedHandler,
+  signOutUser,
+  subscribeAuth,
+} from './lib/auth';
+import { goToHome, goToLogin, isLoginPath } from './lib/auth-route';
 import { AuditHistoryPage } from './pages/audit-history-page';
 import { ControlPanelPage } from './pages/control-panel-page';
 import { CostCalculationPage } from './pages/cost-calculation-page';
@@ -13,7 +21,6 @@ import {
   ProductsPage,
 } from './pages/products-page';
 import { RawMaterialsPage } from './pages/raw-materials-page';
-import type { MaterialPriceType } from './lib/material-price-type';
 import type { AppNavigation } from './lib/app-navigation';
 
 type PageId =
@@ -58,8 +65,6 @@ function App() {
   const [costGroup, setCostGroup] = useState<string | null>(null);
   const [openCostSettings, setOpenCostSettings] = useState(false);
   const [materialSearch, setMaterialSearch] = useState('');
-  const [materialPriceType, setMaterialPriceType] =
-    useState<MaterialPriceType>('CARD_INSTALLMENT');
   const [navOpen, setNavOpen] = useState(false);
 
   const closeNav = () => setNavOpen(false);
@@ -127,6 +132,18 @@ function App() {
             </button>
           ))}
         </nav>
+        <button
+          type="button"
+          className="nav-button logout-button"
+          onClick={() => {
+            void (async () => {
+              await signOutUser();
+              goToLogin();
+            })();
+          }}
+        >
+          Çıkış Yap
+        </button>
       </aside>
       <div className="main">
         <header className="header">
@@ -189,8 +206,6 @@ function App() {
                   : 'door_frame'
               }
               initialSettingsOpen={openCostSettings}
-              materialPriceType={materialPriceType}
-              onMaterialPriceTypeChange={setMaterialPriceType}
               onOpenPriceList={() => setPage('price-list')}
             />
           ) : page === 'price-list' ? (
@@ -221,4 +236,74 @@ function App() {
   );
 }
 
-export default App;
+export default function AuthGate() {
+  const [ready, setReady] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeAuth((user) => {
+      setSignedIn(user != null);
+      setReady(true);
+    });
+    setUnauthorizedHandler(() => {
+      void signOutUser().then(() => {
+        goToLogin();
+        setSignedIn(false);
+      });
+    });
+    return () => {
+      unsub();
+      setUnauthorizedHandler(null);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => {
+      if (isLoginPath()) {
+        if (signedIn) {
+          goToHome();
+        }
+        return;
+      }
+      if (!signedIn) {
+        goToLogin();
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [signedIn]);
+
+  useEffect(() => {
+    if (!ready) {
+      return;
+    }
+    if (!signedIn && !isLoginPath()) {
+      goToLogin();
+      return;
+    }
+    if (signedIn && isLoginPath()) {
+      goToHome();
+    }
+  }, [ready, signedIn]);
+
+  if (!ready) {
+    return (
+      <div className="login-screen">
+        <p className="login-loading">Yükleniyor…</p>
+      </div>
+    );
+  }
+
+  if (!signedIn) {
+    return (
+      <LoginPage
+        onSuccess={() => {
+          goToHome();
+          setSignedIn(true);
+        }}
+      />
+    );
+  }
+
+  return <App />;
+}

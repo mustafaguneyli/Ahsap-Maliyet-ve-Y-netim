@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { MaterialPriceType } from '@prisma/client';
 import {
@@ -25,8 +26,16 @@ import {
 import type { DoorFrameVariantCode } from '../../calculation-engine/calculators/door-frame-variants';
 import { toDecimal } from '../../common/decimal/decimal.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { sourceMaterialById } from '../../data-store/firestore-source-bridge';
 import { CostCalculationService } from '../cost-calculation/cost-calculation.service';
-import { selectCurrentMaterialPrice } from '../cost-calculation/current-material-price';
+import {
+  missingCostMaterialPriceMessage,
+  resolveCostMaterialPriceType,
+} from '../cost-calculation/cost-material-price';
+import { resolveCostMaterialPrice } from '../cost-calculation/current-material-price';
 import { sameMm } from '../cost-calculation/order-quote';
 import {
   buildDoorBuildOrderUpsert,
@@ -66,21 +75,25 @@ export class DoorBuildService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly costCalculationService: CostCalculationService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
-  async quote(dto: DoorBuildQuoteDto, now: Date = new Date()) {
-    const materialPriceType =
-      dto.materialPriceType ?? MaterialPriceType.CARD_INSTALLMENT;
+  private runWithSource<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, fn);
+    }
+    return fn();
+  }
 
-    const material = await this.prisma.rawMaterial.findFirst({
-      where: { id: dto.surfaceRawMaterialId, isActive: true },
-      include: {
-        prices: {
-          where: { isActive: true },
-          orderBy: { effectiveFrom: 'desc' },
-        },
-      },
-    });
+  async quote(dto: DoorBuildQuoteDto, now: Date = new Date()) {
+    return this.runWithSource(() => this.computeQuote(dto, now));
+  }
+
+  private async computeQuote(dto: DoorBuildQuoteDto, now: Date) {
+    const materialPriceType = resolveCostMaterialPriceType(dto.materialPriceType);
+
+    const material = await sourceMaterialById(this.prisma, dto.surfaceRawMaterialId, true);
 
     if (!material) {
       throw new NotFoundException('Seçilen MDF bulunamadı veya pasif.');
@@ -95,18 +108,10 @@ export class DoorBuildService {
       );
     }
 
-    const currentPrice = selectCurrentMaterialPrice(
-      material.prices,
-      materialPriceType,
-      now,
-    );
+    const currentPrice = resolveCostMaterialPrice(material.prices, now);
     if (!currentPrice) {
-      const kind =
-        materialPriceType === MaterialPriceType.CASH
-          ? 'nakit alış fiyatı'
-          : 'kart/taksitli alış fiyatı';
       throw new BadRequestException(
-        `${material.name} için aktif ${kind} tanımlı değil. Diğer alış türüne geçilmez.`,
+        `${missingCostMaterialPriceMessage(material.name)}. Diğer alış türüne geçilmez.`,
       );
     }
 

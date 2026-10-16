@@ -3,6 +3,7 @@ import {
   HttpException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { CalculatorType } from '@prisma/client';
 import { DoorFrameVariantCode } from '../../calculation-engine/calculators/door-frame-variants';
@@ -11,6 +12,10 @@ import {
   type SupurgelikProductCode,
 } from '../../calculation-engine/calculators/supurgelik-mdf-calculator';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { sourceProductById } from '../../data-store/firestore-source-bridge';
 import type { CitaNetQueryDto } from './dto/cita-net-query.dto';
 import { CitaProductionService } from './cita-production.service';
 import { CostCalculationService } from './cost-calculation.service';
@@ -57,18 +62,27 @@ export class OrderQuoteService {
     private readonly costCalculationService: CostCalculationService,
     private readonly citaProductionService: CitaProductionService,
     private readonly genericRecipeService: GenericRecipeService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
   async quote(dto: OrderQuoteDto): Promise<OrderQuoteResult> {
-    const product = await this.prisma.product.findFirst({
-      where: { id: dto.productId, isActive: true, productGroup: { isActive: true } },
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        productGroup: { select: { code: true, name: true, calculatorType: true } },
-      },
-    });
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, () => this.quote(dto));
+    }
+    const loaded = await sourceProductById(this.prisma, dto.productId);
+    const product = loaded
+      ? {
+          id: loaded.id,
+          code: loaded.code,
+          name: loaded.name,
+          productGroup: {
+            code: loaded.productGroup.code,
+            name: loaded.productGroup.name,
+            calculatorType: loaded.productGroup.calculatorType as CalculatorType,
+          },
+        }
+      : null;
     if (!product) {
       throw new NotFoundException('Aktif ürün bulunamadı.');
     }
@@ -251,7 +265,7 @@ export class OrderQuoteService {
     try {
       const list = await this.loadPervazList(product.code, dto.materialPriceType);
       const row = list.rows.find(
-        (item) =>
+        (item: { thicknessMm: string | number; widthMm: string | number; lengthMm: string | number }) =>
           sameMm(item.thicknessMm, dto.thicknessMm!) &&
           sameMm(item.widthMm, dto.widthMm) &&
           sameMm(item.lengthMm, dto.lengthMm),
@@ -302,7 +316,7 @@ export class OrderQuoteService {
           : { productCode: product.code },
       );
       const row = list.rows.find(
-        (item) =>
+        (item: { thicknessMm: string | number; widthMm: string | number; lengthMm: string | number }) =>
           sameMm(item.thicknessMm, dto.thicknessMm!) &&
           sameMm(item.widthMm, dto.widthMm) &&
           sameMm(item.lengthMm, dto.lengthMm),
@@ -460,14 +474,10 @@ function isSupurgelikProductCode(code: string): code is SupurgelikProductCode {
 
 function supurgelikMissingMessages(
   errorCode: string | null,
-  materialPriceType: 'CASH' | 'CARD_INSTALLMENT',
+  _materialPriceType: 'CASH' | 'CARD_INSTALLMENT',
 ): string[] {
   if (errorCode === 'RAW_MATERIAL_PRICE_MISSING') {
-    return [
-      materialPriceType === 'CASH'
-        ? 'Nakit alış fiyatı tanımlı değil.'
-        : 'Kart/taksitli alış fiyatı tanımlı değil.',
-    ];
+    return ['MDF kart/taksitli alış fiyatı tanımlı değil'];
   }
   if (errorCode === 'DECORATIVE_RATE_MISSING') {
     return ['Dekoratif oran tanımlı değil.'];

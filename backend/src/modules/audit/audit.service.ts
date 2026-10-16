@@ -1,5 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { AuditAction, AuditEvent, Prisma } from '@prisma/client';
+import { currentCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { FIRESTORE_COLLECTIONS } from '../../firebase/firestore.collections';
+import { toUtcDate } from '../../firebase/firestore-dates';
 import { PrismaService } from '../../prisma/prisma.service';
 
 export const DEFAULT_AUDIT_ACTOR = 'local-admin';
@@ -54,7 +59,11 @@ export type AuditDbClient = Prisma.TransactionClient | PrismaService;
  */
 @Injectable()
 export class AuditService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
+  ) {}
 
   async record(input: AuditWriteInput, tx?: AuditDbClient): Promise<AuditEvent> {
     const db = tx ?? this.prisma;
@@ -74,6 +83,9 @@ export class AuditService {
   }
 
   async listRecent(limit: number): Promise<{ items: AuditEventListItem[] }> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return this.listRecentFromFirestore(limit);
+    }
     const events = await this.prisma.auditEvent.findMany({
       where: {
         NOT: { fieldName: 'effectiveTo' },
@@ -153,6 +165,120 @@ export class AuditService {
 
     return summaries;
   }
+
+  private async listRecentFromFirestore(
+    limit: number,
+  ): Promise<{ items: AuditEventListItem[] }> {
+    const rows = await this.firestoreStore!.list<Record<string, unknown>>(
+      FIRESTORE_COLLECTIONS.auditEvents,
+    );
+    const events = rows
+      .filter((row) => row.fieldName !== 'effectiveTo')
+      .map((row) => toAuditEvent(row))
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+      .slice(0, limit);
+
+    const summaries = this.buildSummariesFromCache(events);
+    return {
+      items: events.map((event) => ({
+        id: event.id,
+        entityType: event.entityType,
+        entityId: event.entityId,
+        action: event.action,
+        fieldName: event.fieldName,
+        oldValue: event.oldValue,
+        newValue: event.newValue,
+        reason: event.reason,
+        actor: event.actor,
+        createdAt: event.createdAt.toISOString(),
+        summary: summaries.get(event.id) ?? fallbackSummary(event),
+      })),
+    };
+  }
+
+  private buildSummariesFromCache(events: AuditEvent[]): Map<string, string> {
+    const cache = currentCatalogCache();
+    const summaries = new Map<string, string>();
+    const emptyLookups = {
+      priceById: new Map(),
+      extraById: new Map(),
+      bandById: new Map(),
+      materialById: new Map(),
+    };
+    if (!cache) {
+      for (const event of events) {
+        summaries.set(event.id, summarizeEvent(event, emptyLookups));
+      }
+      return summaries;
+    }
+
+    const prices = cache.collection(FIRESTORE_COLLECTIONS.rawMaterialPrices);
+    const extras = cache.collection(FIRESTORE_COLLECTIONS.extraCostValues);
+    const extraTypes = cache.collection(FIRESTORE_COLLECTIONS.extraCostTypes);
+    const bands = cache.collection(FIRESTORE_COLLECTIONS.citaPublishedPriceBands);
+
+    const priceById = new Map(
+      prices.map((row) => {
+        const material = cache.materialById(String(row.rawMaterialId));
+        return [
+          String(row.id),
+          {
+            priceType: String(row.priceType ?? ''),
+            rawMaterial: {
+              name: String(material?.name ?? ''),
+              thicknessMm: {
+                toString: () => String(material?.thicknessMm ?? ''),
+              },
+            },
+          },
+        ];
+      }),
+    );
+    const extraById = new Map(
+      extras.map((row) => {
+        const type = extraTypes.find((item) => item.id === row.extraCostTypeId);
+        return [
+          String(row.id),
+          { extraCostType: { name: String(type?.name ?? '') } },
+        ];
+      }),
+    );
+    const bandById = new Map(
+      bands.map((row) => [
+        String(row.id),
+        { minWidthMm: Number(row.minWidthMm), maxWidthMm: Number(row.maxWidthMm) },
+      ]),
+    );
+    const materialById = new Map(
+      cache.collection(FIRESTORE_COLLECTIONS.rawMaterials).map((row) => [
+        String(row.id),
+        { name: String(row.name ?? '') },
+      ]),
+    );
+
+    for (const event of events) {
+      summaries.set(
+        event.id,
+        summarizeEvent(event, { priceById, extraById, bandById, materialById }),
+      );
+    }
+    return summaries;
+  }
+}
+
+function toAuditEvent(row: Record<string, unknown>): AuditEvent {
+  return {
+    id: String(row.id),
+    entityType: String(row.entityType ?? ''),
+    entityId: String(row.entityId ?? ''),
+    action: row.action as AuditAction,
+    fieldName: row.fieldName == null ? null : String(row.fieldName),
+    oldValue: row.oldValue == null ? null : String(row.oldValue),
+    newValue: row.newValue == null ? null : String(row.newValue),
+    reason: row.reason == null ? null : String(row.reason),
+    actor: String(row.actor ?? DEFAULT_AUDIT_ACTOR),
+    createdAt: toUtcDate(row.createdAt ?? new Date(0), 'createdAt'),
+  };
 }
 
 function groupEntityIds(events: AuditEvent[]): Record<string, string[]> {

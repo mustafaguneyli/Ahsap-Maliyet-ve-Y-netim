@@ -1,0 +1,202 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productGroupId", "order": "ASCENDING" },
+        { "fieldPath": "code", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "products",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productGroupId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "raw_materials",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "code", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "raw_material_prices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "rawMaterialId", "order": "ASCENDING" },
+        { "fieldPath": "priceType", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "effectiveFrom", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "production_yields",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "rawMaterialId", "order": "ASCENDING" },
+        { "fieldPath": "pieceWidthMm", "order": "ASCENDING" },
+        { "fieldPath": "pieceLengthMm", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "production_yields",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "productSizeId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "recipe_items",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "recipeId", "order": "ASCENDING" },
+        { "fieldPath": "sortOrder", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "extra_cost_values",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productGroupId", "order": "ASCENDING" },
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "effectiveFrom", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "extra_cost_values",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "extraCostTypeId", "order": "ASCENDING" },
+        { "fieldPath": "productGroupId", "order": "ASCENDING" },
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" },
+        { "fieldPath": "effectiveFrom", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "pricing_thickness_modifiers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productGroupId", "order": "ASCENDING" },
+        { "fieldPath": "modifierType", "order": "ASCENDING" },
+        { "fieldPath": "thicknessMm", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "pricing_row_exceptions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "thicknessMm", "order": "ASCENDING" },
+        { "fieldPath": "widthMm", "order": "ASCENDING" },
+        { "fieldPath": "lengthMm", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "pricing_settings",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productGroupId", "order": "ASCENDING" },
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "pricing_row_exceptions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "price_overrides",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "productSizeId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "product_pricing_overrides",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "cita_published_price_bands",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productGroupId", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "cita_published_price_band_thicknesses",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "bandId", "order": "ASCENDING" },
+        { "fieldPath": "thicknessMm", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "order_lines",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orderDocumentId", "order": "ASCENDING" },
+        { "fieldPath": "lineNo", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "order_material_lines",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "orderDocumentId", "order": "ASCENDING" },
+        { "fieldPath": "lineNo", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "audit_events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "entityType", "order": "ASCENDING" },
+        { "fieldPath": "entityId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "pervaz_kilcik_yields",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "productId", "order": "ASCENDING" },
+        { "fieldPath": "pervazThicknessMm", "order": "ASCENDING" },
+        { "fieldPath": "pieceLengthMm", "order": "ASCENDING" },
+        { "fieldPath": "isActive", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

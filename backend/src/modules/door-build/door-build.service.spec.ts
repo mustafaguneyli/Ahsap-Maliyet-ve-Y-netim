@@ -372,7 +372,7 @@ describe('DoorBuildService', () => {
     expect(result.sale.profitAmount).toBeNull();
   });
 
-  it('CASH alış türünü bileşen çağrılarına aktarır', async () => {
+  it('CASH alış parametresini CARD_INSTALLMENT maliyet tabanına çevirir', async () => {
     const { service, costCalculationService } = createService();
     await service.quote(
       {
@@ -394,7 +394,7 @@ describe('DoorBuildService', () => {
     expect(costCalculationService.getDoorFrameMdfCosts).toHaveBeenCalledWith(
       '30_MM',
       now,
-      'CASH',
+      'CARD_INSTALLMENT',
     );
     expect(costCalculationService.getAyarliPervazMdfCosts).not.toHaveBeenCalled();
   });
@@ -474,7 +474,7 @@ describe('DoorBuildService', () => {
     ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it('CASH yüzey birim maliyeti Decimal korunur', async () => {
+  it('CASH parametresinde yüzey birim maliyeti CARD fiyatından Decimal korunur', async () => {
     const { service } = createService();
     const result = await service.quote(
       {
@@ -488,7 +488,7 @@ describe('DoorBuildService', () => {
       now,
     );
     expect(result.unitMdfSurfaceCost).toBe(
-      toDecimal('2700').times(2).div(3).toFixed(),
+      toDecimal('3000').times(2).div(3).toFixed(),
     );
   });
 

@@ -1,4 +1,6 @@
+import { Transform } from 'class-transformer';
 import { IsIn, IsNotEmpty, IsOptional, Matches } from 'class-validator';
+import { transformDecimalString } from '../pricing-setting.validation';
 
 const RATE = /^\d+([.,]\d+)?$/;
 
@@ -15,14 +17,17 @@ export class UpdateDoorBuildPricingSettingDto {
 
   @IsNotEmpty({ message: 'Kâr oranı zorunludur.' })
   @Matches(RATE, { message: 'Kâr oranı geçerli bir sayı olmalıdır.' })
+  @Transform(transformDecimalString)
   profitRate!: string;
 
   @IsNotEmpty({ message: 'KDV oranı zorunludur.' })
   @Matches(RATE, { message: 'KDV oranı geçerli bir sayı olmalıdır.' })
+  @Transform(transformDecimalString)
   vatRate!: string;
 
   /** Boş/omit → kart oranı null (nakit var, kart yok). 0 → card = cash. */
   @IsOptional()
   @Matches(RATE, { message: 'Kart/taksit oranı geçerli bir sayı olmalıdır.' })
+  @Transform(transformDecimalString)
   cardMarkupRate?: string;
 }

@@ -1,6 +1,9 @@
 export type MaterialPriceType = 'CASH' | 'CARD_INSTALLMENT';
 
-export const DEFAULT_MATERIAL_PRICE_TYPE: MaterialPriceType = 'CARD_INSTALLMENT';
+export const COST_MATERIAL_PRICE_TYPE: MaterialPriceType = 'CARD_INSTALLMENT';
+
+export const DEFAULT_MATERIAL_PRICE_TYPE: MaterialPriceType =
+  COST_MATERIAL_PRICE_TYPE;
 
 export function materialPriceTypeLabel(value: MaterialPriceType): string {
   return value === 'CASH' ? 'Nakit (Peşin Alış)' : 'Kart / Taksitli Alış';
@@ -21,11 +24,9 @@ export function showsCardSalePrice(value: MaterialPriceType): boolean {
 
 export function missingPurchasePriceLabel(
   materialLabel: string,
-  value: MaterialPriceType,
+  _value: MaterialPriceType = COST_MATERIAL_PRICE_TYPE,
 ): string {
-  const kind =
-    value === 'CASH' ? 'nakit alış fiyatı' : 'kart/taksitli alış fiyatı';
-  return `${materialLabel} için ${kind} tanımlı değil.`;
+  return `${materialLabel} için MDF kart/taksitli alış fiyatı tanımlı değil`;
 }
 
 export function withMaterialPriceType(

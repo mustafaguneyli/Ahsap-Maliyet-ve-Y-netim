@@ -198,7 +198,9 @@ describe('OrderQuoteService', () => {
 
     expect(result.productionCostAvailable).toBe(false);
     expect(result.unitProductionCost).toBeNull();
-    expect(result.missingMessages.join(' ')).toMatch(/peşin alış fiyatı/);
+    expect(result.missingMessages.join(' ')).toMatch(
+      /MDF kart\/taksitli alış fiyatı tanımlı değil/,
+    );
     expect(result.missingMessages.join(' ')).not.toMatch(/CARD_INSTALLMENT/);
   });
 
@@ -577,9 +579,11 @@ describe('OrderQuoteService', () => {
 
     expect(cash.productionCostAvailable).toBe(false);
     expect(cash.unitProductionCost).toBeNull();
-    expect(cash.missingMessages).toEqual(['Nakit alış fiyatı tanımlı değil.']);
+    expect(cash.missingMessages).toEqual([
+      'MDF kart/taksitli alış fiyatı tanımlı değil',
+    ]);
     expect(card.missingMessages).toEqual([
-      'Kart/taksitli alış fiyatı tanımlı değil.',
+      'MDF kart/taksitli alış fiyatı tanımlı değil',
     ]);
   });
 

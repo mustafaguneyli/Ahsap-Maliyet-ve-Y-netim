@@ -23,7 +23,11 @@ import {
 import { ApiError } from '../lib/api';
 import type { AppNavigation, CostSettingsGroup } from '../lib/app-navigation';
 import { extraCostTypeLabel } from '../lib/display-labels';
-import { friendlyMaterialPriceError, type MaterialPriceType } from '../lib/material-price-type';
+import {
+  COST_MATERIAL_PRICE_TYPE,
+  friendlyMaterialPriceError,
+  type MaterialPriceType,
+} from '../lib/material-price-type';
 import { formatSheetSizeCm } from '../lib/length';
 import './control-panel-page.css';
 
@@ -243,7 +247,7 @@ const EXTRA_COST_GROUPS: ExtraCostProductGroup[] = [
   'CITA',
 ];
 
-const PRICE_TYPES: MaterialPriceType[] = ['CASH', 'CARD_INSTALLMENT'];
+const PRICE_TYPES: MaterialPriceType[] = [COST_MATERIAL_PRICE_TYPE];
 
 const EXTRA_COST_FALLBACK_NAMES: Record<string, string> = {
   CUTTING: extraCostTypeLabel('CUTTING'),
@@ -343,10 +347,9 @@ function purchasePriceText(
   thickness: string | number,
   sheetWidthMm: number,
   sheetLengthMm: number,
-  priceType: MaterialPriceType,
+  _priceType: MaterialPriceType,
 ): string {
-  const kind = priceType === 'CASH' ? 'nakit alış fiyatı' : 'kart/taksitli alış fiyatı';
-  return `${formatThickness(thickness)} mm ${formatSheetSizeCm(sheetWidthMm, sheetLengthMm)} MDF ${kind} tanımlı değil.`;
+  return `${formatThickness(thickness)} mm ${formatSheetSizeCm(sheetWidthMm, sheetLengthMm)} MDF kart/taksitli alış fiyatı tanımlı değil.`;
 }
 
 type ListedRow = {

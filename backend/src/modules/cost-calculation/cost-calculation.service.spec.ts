@@ -548,16 +548,16 @@ describe('CostCalculationService fiyat yayılımı', () => {
       both(material12_220, '1800', '2500'),
     ];
     const service = buildService(materials);
-    const cash = await service.getDoorFrameMdfCosts('34_MM', now, 'CASH');
+    const cashRequest = await service.getDoorFrameMdfCosts('34_MM', now, 'CASH');
     const card = await service.getDoorFrameMdfCosts('34_MM', now);
 
-    const cashRow = cash.rows.find((row) => row.displayName === '10×210')!;
+    const cashRow = cashRequest.rows.find((row) => row.displayName === '10×210')!;
     const cardRow = card.rows.find((row) => row.displayName === '10×210')!;
-    const wide = cash.rows.find((row) => row.displayName === '14×220')!;
+    const wide = cashRequest.rows.find((row) => row.displayName === '14×220')!;
 
-    expect(cash.materialPriceType).toBe('CASH');
+    expect(cashRequest.materialPriceType).toBe('CARD_INSTALLMENT');
     expect(card.priceType).toBe(MaterialPriceType.CARD_INSTALLMENT);
-    expect(cashRow.parts.map((part) => part.sheetPrice)).toEqual(['2000', '2000']);
+    expect(cashRow.parts.every((part) => part.sheetPrice === '2500')).toBe(true);
     expect(cashRow.parts.map((part) => part.rawMaterialCode)).toEqual([
       'MDF-22-2100X2800-ZIMPARALI',
       'MDF-12-2100X2800-ZIMPARALI',
@@ -567,19 +567,24 @@ describe('CostCalculationService fiyat yayılımı', () => {
       'MDF-22-2100X2800-ZIMPARALI',
       'MDF-12-2200X2800-ZIMPARALI',
     ]);
-    expect(wide.parts.map((part) => part.sheetPrice)).toEqual(['2000', '1800']);
+    expect(wide.parts.map((part) => part.sheetPrice)).toEqual(['2500', '2500']);
     expect(cashRow.parts.map((part) => part.netQty)).toEqual(
       cardRow.parts.map((part) => part.netQty),
     );
     expect(cashRow.extraCosts).toEqual(cardRow.extraCosts);
 
-    const missingCash = buildService([
+    const missingCard = buildService([
       both(material22, '2000', '2500'),
-      { ...both(material12, '2000', '2500'), prices: both(material12, '2000', '2500').prices.filter((price) => price.priceType === MaterialPriceType.CARD_INSTALLMENT) },
+      {
+        ...both(material12, '2000', '2500'),
+        prices: both(material12, '2000', '2500').prices.filter(
+          (price) => price.priceType === MaterialPriceType.CASH,
+        ),
+      },
       both(material12_220, '1800', '2500'),
     ]);
-    await expect(missingCash.getDoorFrameMdfCosts('34_MM', now, 'CASH')).rejects.toThrow(
-      'MDF-12-2100X2800-ZIMPARALI için şu an geçerli CASH alış fiyatı bulunamadı.',
+    await expect(missingCard.getDoorFrameMdfCosts('34_MM', now, 'CASH')).rejects.toThrow(
+      'MDF-12-2100X2800-ZIMPARALI için MDF kart/taksitli alış fiyatı tanımlı değil',
     );
   });
 
@@ -665,9 +670,9 @@ describe('CostCalculationService fiyat yayılımı', () => {
         .parts.find((part) => part.thicknessMm === '12')!.sheetPrice;
     };
 
-    expect(await sheet('2026-10-03T23:59:59.999Z', 'CASH')).toBe('2000');
-    expect(await sheet('2026-10-04T00:00:00.000Z', 'CASH')).toBe('1885');
-    expect(await sheet('2026-10-04T00:00:00.001Z', 'CASH')).toBe('1885');
+    expect(await sheet('2026-10-03T23:59:59.999Z', 'CASH')).toBe('2185');
+    expect(await sheet('2026-10-04T00:00:00.000Z', 'CASH')).toBe('2185');
+    expect(await sheet('2026-10-04T00:00:00.001Z', 'CASH')).toBe('2185');
     expect(await sheet('2026-10-03T23:59:59.999Z')).toBe('2185');
     expect(await sheet('2026-10-04T00:00:00.000Z')).toBe('2185');
     expect(await sheet('2026-10-04T00:00:00.001Z')).toBe('2185');
@@ -721,12 +726,12 @@ describe('CostCalculationService fiyat yayılımı', () => {
     const baseCard = await quote(load('2000', '2185'));
     const raisedCard = await quote(load('2000', '2300'));
 
-    expect(sheet12(baseCash)).toBe('2000');
-    expect(sheet12(raisedCash)).toBe('2100');
+    expect(sheet12(baseCash)).toBe('2185');
+    expect(sheet12(raisedCash)).toBe('2185');
     expect(sheet12(baseCard)).toBe('2185');
     expect(sheet12(raisedCard)).toBe('2300');
     expect(sheet12(await quote(load('2100', '2185')))).toBe('2185');
-    expect(sheet12(await quote(load('2000', '2300'), 'CASH'))).toBe('2000');
+    expect(sheet12(await quote(load('2000', '2300'), 'CASH'))).toBe('2300');
     const baseRow = baseCash.rows.find((row) => row.displayName === '10×210')!;
     const raisedRow = raisedCash.rows.find((row) => row.displayName === '10×210')!;
     expect(baseRow.parts.map((part) => part.netQty)).toEqual(

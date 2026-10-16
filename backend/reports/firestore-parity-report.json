@@ -1,0 +1,216 @@
+{
+  "at": "2026-10-07T19:49:49.134Z",
+  "readOnly": true,
+  "cutover": "COUNT+VALUE PARITY OK (cutover ayrı onay)",
+  "counts": [
+    {
+      "collection": "product_groups",
+      "postgres": 6,
+      "firestore": 6,
+      "expected": 6,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "products",
+      "postgres": 12,
+      "firestore": 12,
+      "expected": 12,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "product_sizes",
+      "postgres": 36,
+      "firestore": 36,
+      "expected": 36,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "raw_materials",
+      "postgres": 23,
+      "firestore": 23,
+      "expected": 23,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "raw_material_prices",
+      "postgres": 61,
+      "firestore": 61,
+      "expected": 61,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "production_yields",
+      "postgres": 195,
+      "firestore": 195,
+      "expected": 195,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "kilcik_types",
+      "postgres": 2,
+      "firestore": 2,
+      "expected": 2,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "pervaz_kilcik_yields",
+      "postgres": 20,
+      "firestore": 20,
+      "expected": 20,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "recipes",
+      "postgres": 1,
+      "firestore": 1,
+      "expected": 1,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "recipe_items",
+      "postgres": 1,
+      "firestore": 1,
+      "expected": 1,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "extra_cost_types",
+      "postgres": 5,
+      "firestore": 5,
+      "expected": 5,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "extra_cost_values",
+      "postgres": 18,
+      "firestore": 18,
+      "expected": 18,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "pricing_settings",
+      "postgres": 15,
+      "firestore": 15,
+      "expected": 15,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "pricing_thickness_modifiers",
+      "postgres": 3,
+      "firestore": 3,
+      "expected": 3,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "pricing_row_exceptions",
+      "postgres": 22,
+      "firestore": 22,
+      "expected": 22,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "price_overrides",
+      "postgres": 4,
+      "firestore": 4,
+      "expected": 4,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "product_pricing_overrides",
+      "postgres": 8,
+      "firestore": 8,
+      "expected": 8,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "cita_published_price_bands",
+      "postgres": 6,
+      "firestore": 6,
+      "expected": 6,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "cita_published_price_band_thicknesses",
+      "postgres": 19,
+      "firestore": 19,
+      "expected": 19,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "order_documents",
+      "postgres": 8,
+      "firestore": 8,
+      "expected": 8,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "order_lines",
+      "postgres": 9,
+      "firestore": 9,
+      "expected": 9,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "order_material_lines",
+      "postgres": 22,
+      "firestore": 22,
+      "expected": 22,
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    },
+    {
+      "collection": "audit_events",
+      "postgres": 187,
+      "firestore": 187,
+      "expected": ">=187",
+      "countParity": true,
+      "expectedParity": true,
+      "auditGrowthIgnored": false
+    }
+  ],
+  "valueDiffCount": 0,
+  "valueDiffs": []
+}

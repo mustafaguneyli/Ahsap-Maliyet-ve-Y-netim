@@ -529,19 +529,18 @@ describe('CitaListService', () => {
 
     const result = await service.listProductionCosts(NOW, 'CASH');
 
-    expect(result.materialPriceType).toBe('CASH');
+    expect(result.materialPriceType).toBe('CARD_INSTALLMENT');
     expect(citaProductionService.getProductionCost).toHaveBeenCalledWith(
       {
         thicknessMm: '14',
         widthMm: '40',
         lengthMm: '2800',
-        materialPriceType: 'CASH',
       },
       NOW,
     );
     expect(result.rows[0]).toMatchObject({
       statusCode: CITA_RAW_MATERIAL_PRICE_MISSING,
-      materialPriceType: 'CASH',
+      materialPriceType: 'CARD_INSTALLMENT',
       mdfUnitCost: null,
       sheetPrice: null,
     });

@@ -55,6 +55,28 @@ export async function loadCardMarkupRate(
   productGroupCode: string,
   productId?: string | null,
 ): Promise<string | null> {
+  const { currentCatalogCache } = await import('../../data-store/firestore-catalog-cache');
+  const cache = currentCatalogCache();
+  if (cache) {
+    const group = cache.groupByCode(productGroupCode);
+    if (!group) {
+      return null;
+    }
+    const toCardRow = (row: Record<string, unknown>): CardMarkupSettingRow => ({
+      isActive: row.isActive === true,
+      productGroupId: row.productGroupId == null ? null : String(row.productGroupId),
+      productId: row.productId == null ? null : String(row.productId),
+      cardMarkupRate: row.cardMarkupRate == null ? null : String(row.cardMarkupRate),
+    });
+    const groupSettings = cache.pricingSettings({
+      productGroupId: String(group.id),
+      productId: null,
+    }).map(toCardRow);
+    const productSettings = productId
+      ? cache.pricingSettings({ productId, productGroupId: null }).map(toCardRow)
+      : [];
+    return resolveCardMarkupRateWithProductFallback(groupSettings, productSettings);
+  }
   const group = await prisma.productGroup.findUnique({
     where: { code: productGroupCode },
   });

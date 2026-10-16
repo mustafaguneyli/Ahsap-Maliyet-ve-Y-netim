@@ -128,6 +128,44 @@ describe('group cardMarkupRate yönetimi', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it('number 20 / 0 / 20.5 kabul eder; NaN ve Infinity reddeder', async () => {
+    const service = new PricingSettingsService(
+      { $transaction: jest.fn().mockRejectedValue(new Error('tx-reached')) } as never,
+      { record: jest.fn() } as never,
+    );
+
+    await expect(
+      service.replaceGroupCardMarkupRate({
+        productGroup: 'CITA',
+        cardMarkupRate: 20 as never,
+      }),
+    ).rejects.toThrow('tx-reached');
+    await expect(
+      service.replaceGroupCardMarkupRate({
+        productGroup: 'CITA',
+        cardMarkupRate: 0 as never,
+      }),
+    ).rejects.toThrow('tx-reached');
+    await expect(
+      service.replaceGroupCardMarkupRate({
+        productGroup: 'CITA',
+        cardMarkupRate: 20.5 as never,
+      }),
+    ).rejects.toThrow('tx-reached');
+    await expect(
+      service.replaceGroupCardMarkupRate({
+        productGroup: 'CITA',
+        cardMarkupRate: Number.NaN as never,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    await expect(
+      service.replaceGroupCardMarkupRate({
+        productGroup: 'CITA',
+        cardMarkupRate: Number.POSITIVE_INFINITY as never,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it('eksik grup oranını yazar; aynı değer ikinci kez sürüm açmaz', async () => {
     const rows: Array<Record<string, unknown>> = [];
     const audit = jest.fn();

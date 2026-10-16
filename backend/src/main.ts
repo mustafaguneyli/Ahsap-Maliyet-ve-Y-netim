@@ -1,18 +1,15 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { resolveAllowedOrigins } from './common/http/cors-origins';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
 
-  const frontendOrigin = process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173';
-  const allowedOrigins = [
-    frontendOrigin,
-    frontendOrigin.replace('://localhost', '://127.0.0.1'),
-    frontendOrigin.replace('://127.0.0.1', '://localhost'),
-  ];
   app.enableCors({
-    origin: [...new Set(allowedOrigins)],
+    origin: resolveAllowedOrigins(),
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
   });
 
   app.useGlobalPipes(
@@ -24,7 +21,7 @@ async function bootstrap(): Promise<void> {
   );
 
   const port = Number(process.env.PORT ?? 3000);
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
 }
 
 void bootstrap();

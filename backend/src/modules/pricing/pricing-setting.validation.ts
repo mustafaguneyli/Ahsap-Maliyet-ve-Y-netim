@@ -1,6 +1,23 @@
 import { BadRequestException } from '@nestjs/common';
 import { toDecimal } from '../../common/decimal/decimal.util';
 
+/**
+ * JSON number / "20" / "20,5" → canonical string. NaN/Infinity Matches ile 400 olur.
+ * Firestore'a JS Number yazılmaz.
+ */
+export function transformDecimalString({ value }: { value: unknown }): unknown {
+  if (value == null || value === '') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : 'NaN';
+  }
+  if (typeof value === 'string') {
+    return value.trim().replace(',', '.');
+  }
+  return value;
+}
+
 export type PricingSettingInput = {
   productGroupId: string | null | undefined;
   productId: string | null | undefined;

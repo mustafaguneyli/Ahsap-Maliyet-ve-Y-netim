@@ -14,15 +14,21 @@ import { RecipesModule } from './modules/recipes/recipes.module';
 import { OrderDocumentsModule } from './modules/order-documents/order-documents.module';
 import { DoorBuildModule } from './modules/door-build/door-build.module';
 import { PriceListModule } from './modules/price-list/price-list.module';
+import { AuthModule } from './common/auth/auth.module';
+import { DataStoreModule } from './data-store/data-store.module';
+import { FirebaseModule } from './firebase/firebase.module';
 import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env'],
+      envFilePath: ['.env', `.env.${process.env.NODE_ENV ?? 'development'}`],
     }),
     PrismaModule,
+    FirebaseModule,
+    AuthModule,
+    DataStoreModule,
     HealthModule,
     MaterialsModule,
     ProductsModule,

@@ -2,7 +2,11 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
 import { decimalToPrisma, toDecimal } from '../../common/decimal/decimal.util';
 import { AuditService } from '../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -83,13 +87,24 @@ export class ExtraCostsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
   async listForProductGroup(
     productGroupCode: string,
     now: Date = new Date(),
   ): Promise<ExtraCostListResponse> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, () =>
+        this.listForProductGroup(productGroupCode, now),
+      );
+    }
     const typeOrder = extraCostTypeOrderForGroup(productGroupCode);
+    const cache = currentCatalogCache();
+    if (cache) {
+      return this.listForProductGroupFromCache(cache, productGroupCode, typeOrder, now);
+    }
 
     const group = await this.prisma.productGroup.findUnique({
       where: { code: productGroupCode },
@@ -164,12 +179,129 @@ export class ExtraCostsService {
     };
   }
 
+  private listForProductGroupFromCache(
+    cache: import('../../data-store/firestore-catalog-cache').FirestoreCatalogCache,
+    productGroupCode: string,
+    typeOrder: readonly string[],
+    now: Date,
+  ): ExtraCostListResponse {
+    const group = cache.groupByCode(productGroupCode);
+    if (!group) {
+      throw new NotFoundException(`Ürün grubu bulunamadı: ${productGroupCode}`);
+    }
+    const types = cache.extraTypes().filter((row) => row.isActive === true);
+    const typeByCode = new Map(types.map((type) => [String(type.code), type]));
+    let total = toDecimal(0);
+    const items: ExtraCostListItem[] = [];
+    for (const code of typeOrder) {
+      const type = typeByCode.get(code);
+      if (!type) {
+        throw new NotFoundException(`Ek maliyet tipi bulunamadı: ${code}`);
+      }
+      const values = cache.extraValuesForType(String(group.id), String(type.id)).map((row) =>
+        this.shapeExtraCostValue(cache, row),
+      );
+      if (productGroupCode === 'SUPURGELIK' || productGroupCode === 'CITA') {
+        const currentCandidates = values.filter(
+          (value) =>
+            value.isActive &&
+            value.effectiveFrom.getTime() <= now.getTime() &&
+            (value.effectiveTo == null || value.effectiveTo.getTime() > now.getTime()),
+        );
+        if (currentCandidates.length > 1) {
+          throw new BadRequestException(
+            `${productGroupCode} / ${code} için aynı anda geçerli birden fazla aktif ExtraCostValue bulundu.`,
+          );
+        }
+      }
+      const current = selectCurrentExtraCostValue(values, now);
+      if (current) {
+        total = total.plus(toDecimal(current.amount.toString()));
+      }
+      items.push({
+        typeId: String(type.id),
+        typeCode: String(type.code),
+        typeName: String(type.name),
+        valueId: current?.id ?? null,
+        amount: current ? current.amount.toString() : null,
+        effectiveFrom: current ? current.effectiveFrom.toISOString() : null,
+        effectiveTo: current?.effectiveTo ? current.effectiveTo.toISOString() : null,
+      });
+    }
+    return {
+      productGroupCode: String(group.code),
+      productGroupName: String(group.name),
+      asOf: now.toISOString(),
+      items,
+      totalAmount: total.toString(),
+    };
+  }
+
+  private shapeExtraCostValue(
+    cache: import('../../data-store/firestore-catalog-cache').FirestoreCatalogCache,
+    row: Record<string, unknown>,
+  ) {
+    return {
+      id: String(row.id),
+      amount: { toString: () => String(row.amount) },
+      effectiveFrom: cache.asDate(row.effectiveFrom, 'effectiveFrom'),
+      effectiveTo: cache.asOptionalDate(row.effectiveTo, 'effectiveTo'),
+      isActive: row.isActive === true,
+    };
+  }
+
   /**
    * SUPURGELIK group-scope PP_WRAPPING. Değer yoksa amount=null; 0 uydurulmaz.
    */
   async getSupurgelikPpWrapping(
     now: Date = new Date(),
   ): Promise<ExtraCostListResponse> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, () => this.getSupurgelikPpWrapping(now));
+    }
+    const cache = currentCatalogCache();
+    if (cache) {
+      const group = cache.groupByCode('SUPURGELIK');
+      if (!group) {
+        throw new NotFoundException('Ürün grubu bulunamadı: SUPURGELIK');
+      }
+      const type = cache.extraTypes().find((row) => row.code === SUPURGELIK_PP_WRAPPING_TYPE_CODE);
+      if (!type || type.isActive !== true) {
+        throw new NotFoundException(`Ek maliyet tipi bulunamadı: ${SUPURGELIK_PP_WRAPPING_TYPE_CODE}`);
+      }
+      const values = cache.extraValuesForType(String(group.id), String(type.id)).map((row) =>
+        this.shapeExtraCostValue(cache, row),
+      );
+      const currentCandidates = values.filter(
+        (value) =>
+          value.isActive &&
+          value.effectiveFrom.getTime() <= now.getTime() &&
+          (value.effectiveTo == null || value.effectiveTo.getTime() > now.getTime()),
+      );
+      if (currentCandidates.length > 1) {
+        throw new BadRequestException(
+          'SUPURGELIK / PP_WRAPPING için aynı anda geçerli birden fazla aktif ExtraCostValue bulundu.',
+        );
+      }
+      const current = selectCurrentExtraCostValue(values, now);
+      return {
+        productGroupCode: String(group.code),
+        productGroupName: String(group.name),
+        asOf: now.toISOString(),
+        items: [
+          {
+            typeId: String(type.id),
+            typeCode: String(type.code),
+            typeName: String(type.name),
+            valueId: current?.id ?? null,
+            amount: current ? current.amount.toString() : null,
+            effectiveFrom: current ? current.effectiveFrom.toISOString() : null,
+            effectiveTo: current?.effectiveTo ? current.effectiveTo.toISOString() : null,
+          },
+        ],
+        totalAmount: current ? current.amount.toString() : '',
+      };
+    }
     const group = await this.prisma.productGroup.findUnique({
       where: { code: 'SUPURGELIK' },
     });

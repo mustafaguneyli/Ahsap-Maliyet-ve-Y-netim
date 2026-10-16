@@ -1,7 +1,9 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { AuditAction, Prisma } from '@prisma/client';
 import { getDoorFrameSizes } from '../../calculation-engine/calculators/door-frame-variants';
@@ -10,6 +12,21 @@ import { AuditService } from '../audit/audit.service';
 import { CITA_SUPPORTED_THICKNESSES_MM } from '../products/cita-cut-rule.fixture';
 import { CITA_PRODUCT_SIZE_SEEDS } from '../products/cita-product-seed';
 import { SUPURGELIK_PRODUCT_SIZE_SEEDS } from '../products/supurgelik-product-seed';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import {
+  catalogProductSnapshotFromStore,
+  listOrderCatalogFromStore,
+  recipeComponentsFromStore,
+} from '../../data-store/firestore-order-catalog';
+import {
+  FirestoreOrderRepository,
+  type OrderHeaderSnapshot,
+  type OrderLineSnapshot,
+  type OrderMaterialSnapshot,
+  type StoredOrder,
+} from '../../data-store/firestore-order-repository';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { UniqueConstraintError } from '../../data-store/store-errors';
 import { PrismaService } from '../../prisma/prisma.service';
 import { UpsertOrderDocumentDto } from './dto/upsert-order-document.dto';
 import { formatDocumentTitle } from './order-letterhead';
@@ -61,9 +78,22 @@ export class OrderDocumentsService {
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
     private readonly materialResolver: OrderMaterialResolver,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
+  private useFirestore(): boolean {
+    return this.dataStore?.isFirestore() === true && this.firestoreStore != null;
+  }
+
+  private orderRepo(): FirestoreOrderRepository {
+    return new FirestoreOrderRepository(this.firestoreStore!);
+  }
+
   async catalog() {
+    if (this.useFirestore()) {
+      return this.catalogFromFirestore();
+    }
     const groups = await this.prisma.productGroup.findMany({
       where: {
         isActive: true,
@@ -181,6 +211,13 @@ export class OrderDocumentsService {
 
   async preview(dto: UpsertOrderDocumentDto) {
     const totals = this.totalsOrThrow(dto);
+    if (this.useFirestore()) {
+      const materials = await this.buildMaterials(this.prisma, dto, totals);
+      return {
+        ...this.previewBody(dto, totals, materials),
+        warnings: duplicateMaterialWarnings(materials),
+      };
+    }
     return this.prisma.$transaction(async (tx) => {
       const materials = await this.buildMaterials(tx, dto, totals);
       return {
@@ -192,6 +229,9 @@ export class OrderDocumentsService {
 
   async create(dto: UpsertOrderDocumentDto) {
     const totals = this.totalsOrThrow(dto);
+    if (this.useFirestore()) {
+      return this.createOnFirestore(dto, totals);
+    }
     const created = await this.prisma.$transaction(async (tx) => {
       const materials = await this.buildMaterials(tx, dto, totals);
       const snapshots = await this.lineSnapshots(tx, dto, totals);
@@ -221,6 +261,9 @@ export class OrderDocumentsService {
 
   async update(id: string, dto: UpsertOrderDocumentDto) {
     const totals = this.totalsOrThrow(dto);
+    if (this.useFirestore()) {
+      return this.updateOnFirestore(id, dto, totals);
+    }
     const updated = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.orderDocument.findUnique({
         where: { id },
@@ -263,6 +306,9 @@ export class OrderDocumentsService {
   }
 
   async recalculateMaterials(id: string) {
+    if (this.useFirestore()) {
+      return this.recalculateMaterialsOnFirestore(id);
+    }
     const updated = await this.prisma.$transaction(async (tx) => {
       const existing = await tx.orderDocument.findUnique({
         where: { id },
@@ -296,6 +342,9 @@ export class OrderDocumentsService {
   }
 
   async list(query: ListOrderDocumentsQueryDto = {}) {
+    if (this.useFirestore()) {
+      return this.listFromFirestore(query);
+    }
     const normalized = normalizeOrderListQuery(query);
     const where = orderListWhere(normalized);
     const [total, rows] = await this.prisma.$transaction([
@@ -341,20 +390,40 @@ export class OrderDocumentsService {
   }
 
   async get(id: string) {
+    if (this.useFirestore()) {
+      return this.detailFromStored(await this.requireStoredOrder(id));
+    }
     return this.toDetail(await this.requireOrder(id));
   }
 
   async customerPrint(id: string) {
+    if (this.useFirestore()) {
+      const order = await this.requireStoredOrder(id);
+      return { html: renderCustomerPrintHtml(this.customerModelFromStored(order)) };
+    }
     const order = await this.requireOrder(id);
     return { html: renderCustomerPrintHtml(this.customerModel(order)) };
   }
 
   async workshopPrint(id: string) {
+    if (this.useFirestore()) {
+      const order = await this.requireStoredOrder(id);
+      return { html: renderWorkshopPrintHtml(this.workshopModelFromStored(order)) };
+    }
     const order = await this.requireOrder(id);
     return { html: renderWorkshopPrintHtml(this.workshopModel(order)) };
   }
 
   async combinedPrint(id: string) {
+    if (this.useFirestore()) {
+      const order = await this.requireStoredOrder(id);
+      return {
+        html: renderCombinedPrintHtml(
+          this.customerModelFromStored(order),
+          this.workshopModelFromStored(order),
+        ),
+      };
+    }
     const order = await this.requireOrder(id);
     return {
       html: renderCombinedPrintHtml(
@@ -464,6 +533,22 @@ export class OrderDocumentsService {
     if (!productId) {
       throw new BadRequestException('Katalog satırı için ürün seçilmelidir.');
     }
+    if (this.useFirestore() && this.firestoreStore) {
+      try {
+        const snapshot = await catalogProductSnapshotFromStore(this.firestoreStore, productId);
+        if (!snapshot) {
+          throw new BadRequestException('Seçilen ürün sipariş kataloğunda yok.');
+        }
+        return snapshot;
+      } catch (error) {
+        if (error instanceof Error && error.message === 'INACTIVE_CATALOG_PRODUCT') {
+          throw new BadRequestException(
+            'Seçilen ürün kaydı artık aktif değil. Kayıtlı sipariş açılabilir; kaydetmek için ürünü değiştirin veya serbest satır yapın.',
+          );
+        }
+        throw error;
+      }
+    }
     const product = await tx.product.findUnique({
       where: { id: productId },
       include: { productGroup: true },
@@ -552,7 +637,22 @@ export class OrderDocumentsService {
         planned.push(...storedAuto.map((item) => ({ ...storedAutoToPlanned(item), lineNo })));
         continue;
       }
-      const components = await this.materialResolver.resolve(tx, line);
+      let components = null as Awaited<ReturnType<OrderMaterialResolver['resolve']>>;
+      if (this.useFirestore() && this.firestoreStore && line.kind === 'CATALOG' && line.productId) {
+        const widthMm = integerMm(line.widthMm);
+        const lengthMm = integerMm(line.lengthMm);
+        if (widthMm != null && lengthMm != null) {
+          components = await recipeComponentsFromStore(
+            this.firestoreStore,
+            line.productId,
+            widthMm,
+            lengthMm,
+          );
+        }
+      }
+      if (components == null && !this.useFirestore()) {
+        components = await this.materialResolver.resolve(tx, line);
+      }
       planned.push(
         ...planComponents({
           lineNo,
@@ -692,6 +792,397 @@ export class OrderDocumentsService {
       grandTotal: totals.grandTotal.toFixed(),
       grandTotalDisplay: formatOrderMoney(totals.grandTotal),
       materials,
+    };
+  }
+
+  private async catalogFromFirestore() {
+    const fromStore = await listOrderCatalogFromStore(this.firestoreStore!);
+    const pervazYields = fromStore.pervazSizes;
+    return {
+      groups: fromStore.groups,
+      doorFrameSizes: {
+        '34_MM': doorSizes('34_MM'),
+        '30_MM': doorSizes('30_MM'),
+      },
+      groupSizes: {
+        CITA: CITA_PRODUCT_SIZE_SEEDS,
+        SUPURGELIK: SUPURGELIK_PRODUCT_SIZE_SEEDS,
+        PERVAZ: pervazYields,
+        ...fromStore.genericSizesByGroup,
+      },
+      citaThicknessesMm: CITA_SUPPORTED_THICKNESSES_MM,
+      pervazThicknessesMm: fromStore.pervazThicknesses,
+      citaAllowsCustomSize: true,
+      priceBasisNote:
+        'Birim satış fiyatı KDV hariçtir. KDV, iskonto sonrası ara toplamın üzerine eklenir.',
+    };
+  }
+
+  private async createOnFirestore(
+    dto: UpsertOrderDocumentDto,
+    totals: ReturnType<OrderDocumentsService['totalsOrThrow']>,
+  ) {
+    const lines = await this.snapshotLines(dto, totals);
+    const materials = await this.buildMaterials(this.prisma, dto, totals);
+    try {
+      const stored = await this.orderRepo().create({
+        header: this.headerSnapshot(dto, totals),
+        lines,
+        materials: this.materialSnapshots(materials),
+      });
+      return this.detailFromStored(stored);
+    } catch (error) {
+      if (error instanceof UniqueConstraintError) {
+        throw new ConflictException('Bu sipariş numarası zaten var.');
+      }
+      throw error;
+    }
+  }
+
+  private async updateOnFirestore(
+    id: string,
+    dto: UpsertOrderDocumentDto,
+    totals: ReturnType<OrderDocumentsService['totalsOrThrow']>,
+  ) {
+    const existing = await this.requireStoredOrder(id);
+    const lines = await this.snapshotLines(dto, totals);
+    const materials = await this.buildMaterials(this.prisma, dto, totals, {
+      existing: existing as unknown as OrderRecord,
+      refreshAuto: false,
+    });
+    const stored = await this.orderRepo().update(id, {
+      header: this.headerSnapshot(dto, totals),
+      lines,
+      materials: this.materialSnapshots(materials),
+    });
+    return this.detailFromStored(stored);
+  }
+
+  private async recalculateMaterialsOnFirestore(id: string) {
+    const existing = await this.requireStoredOrder(id);
+    const dto = this.dtoFromStored(existing);
+    const totals = this.totalsOrThrow(dto);
+    const materials = await this.buildMaterials(this.prisma, dto, totals, {
+      existing: existing as unknown as OrderRecord,
+      refreshAuto: true,
+    });
+    const stored = await this.orderRepo().update(id, {
+      header: {
+        customerName: existing.customerName,
+        customerAddress: existing.customerAddress,
+        taxOffice: existing.taxOffice,
+        customerPhone: existing.customerPhone,
+        taxNumber: existing.taxNumber,
+        documentDateText: existing.documentDateText,
+        vatRate: existing.vatRate,
+        grossTotal: existing.grossTotal,
+        discountAmount: existing.discountAmount,
+        netTotal: existing.netTotal,
+        vatAmount: existing.vatAmount,
+        grandTotal: existing.grandTotal,
+      },
+      lines: existing.lines,
+      materials: this.materialSnapshots(materials),
+    });
+    return this.detailFromStored(stored);
+  }
+
+  private async listFromFirestore(query: ListOrderDocumentsQueryDto) {
+    const normalized = normalizeOrderListQuery(query);
+    const all = await this.orderRepo().list();
+    const filtered = all.filter((row) => {
+      if (normalized.q) {
+        const q = normalized.q.toLocaleLowerCase('tr-TR');
+        const hay = `${row.orderNumber} ${row.customerName}`.toLocaleLowerCase('tr-TR');
+        if (!hay.includes(q)) {
+          return false;
+        }
+      }
+      const created = toIsoDate(row.createdAt);
+      if (normalized.from && created && created.getTime() < normalized.from.getTime()) {
+        return false;
+      }
+      if (normalized.to && created && created.getTime() > normalized.to.getTime()) {
+        return false;
+      }
+      return true;
+    });
+    filtered.sort((a, b) => {
+      const aTime = toIsoDate(a.updatedAt)?.getTime() ?? 0;
+      const bTime = toIsoDate(b.updatedAt)?.getTime() ?? 0;
+      return bTime - aTime || b.orderNumber.localeCompare(a.orderNumber);
+    });
+    const start = (normalized.page - 1) * normalized.pageSize;
+    const pageRows = filtered.slice(start, start + normalized.pageSize);
+    return {
+      items: pageRows.map((row) => {
+        const totalQuantity = sumQuantities(row.lines.map((line) => line.quantity));
+        return {
+          id: row.id,
+          orderNumber: row.orderNumber,
+          customerName: row.customerName,
+          documentDateText: row.documentDateText,
+          grandTotal: row.grandTotal,
+          grandTotalDisplay: formatOrderMoney(row.grandTotal),
+          lineCount: row.lines.length,
+          totalQuantity,
+          totalQuantityDisplay: formatQuantityText(totalQuantity),
+          createdAt: toIsoString(row.createdAt),
+          updatedAt: toIsoString(row.updatedAt),
+        };
+      }),
+      total: filtered.length,
+      page: normalized.page,
+      pageSize: normalized.pageSize,
+    };
+  }
+
+  private async requireStoredOrder(id: string): Promise<StoredOrder> {
+    const order = await this.orderRepo().get(id);
+    if (!order) {
+      throw new NotFoundException('Sipariş bulunamadı.');
+    }
+    return order;
+  }
+
+  private async snapshotLines(
+    dto: UpsertOrderDocumentDto,
+    totals: ReturnType<OrderDocumentsService['totalsOrThrow']>,
+  ): Promise<OrderLineSnapshot[]> {
+    const rows: OrderLineSnapshot[] = [];
+    for (let index = 0; index < dto.lines.length; index += 1) {
+      const line = dto.lines[index];
+      const calc = totals.lines[index];
+      const catalog = await this.catalogSnapshot(this.prisma as unknown as Prisma.TransactionClient, line.kind, line.productId);
+      rows.push({
+        lineNo: index + 1,
+        kind: line.kind,
+        productId: catalog.productId,
+        productGroupCode: catalog.productGroupCode,
+        productGroupName: catalog.productGroupName,
+        catalogProductName: catalog.catalogProductName,
+        productNameText: line.productNameText.trim(),
+        widthMm: line.widthMm?.trim() ? line.widthMm : null,
+        lengthMm: line.lengthMm?.trim() ? line.lengthMm : null,
+        thicknessMm: line.thicknessMm?.trim() ? line.thicknessMm : null,
+        decorText: emptyToNull(line.decorText),
+        productionNote: emptyToNull(line.productionNote),
+        quantity: calc.quantity.toFixed(),
+        unitText: line.unitText.trim(),
+        discountRate: calc.discountRate.toFixed(),
+        unitPrice: calc.unitPrice.toFixed(),
+        lineAmount: calc.lineAmount.toFixed(),
+        lineDiscountAmount: calc.lineDiscountAmount.toFixed(),
+        priceSource: line.priceSource,
+      });
+    }
+    return rows;
+  }
+
+  private headerSnapshot(
+    dto: UpsertOrderDocumentDto,
+    totals: ReturnType<OrderDocumentsService['totalsOrThrow']>,
+  ): OrderHeaderSnapshot {
+    return {
+      customerName: dto.customerName.trim(),
+      customerAddress: emptyToNull(dto.customerAddress),
+      taxOffice: emptyToNull(dto.taxOffice),
+      customerPhone: emptyToNull(dto.customerPhone),
+      taxNumber: emptyToNull(dto.taxNumber),
+      documentDateText: emptyToNull(dto.documentDateText),
+      vatRate: totals.vatRate.toFixed(),
+      grossTotal: totals.grossTotal.toFixed(),
+      discountAmount: totals.discountAmount.toFixed(),
+      netTotal: totals.netTotal.toFixed(),
+      vatAmount: totals.vatAmount.toFixed(),
+      grandTotal: totals.grandTotal.toFixed(),
+    };
+  }
+
+  private materialSnapshots(materials: PlannedMaterial[]): OrderMaterialSnapshot[] {
+    return materials.map((item) => ({
+      source: item.source,
+      lineNo: item.lineNo,
+      rawMaterialId: item.rawMaterialId,
+      materialNameText: item.materialNameText,
+      thicknessMm: item.thicknessMm,
+      sheetWidthMm: item.sheetWidthMm,
+      sheetLengthMm: item.sheetLengthMm,
+      surfaceType: item.surfaceType,
+      quantity: item.quantity,
+      pieceQuantity: item.pieceQuantity,
+      sheetQuantity: item.sheetQuantity,
+      netQtySnapshot: item.netQtySnapshot,
+      componentRole: item.componentRole,
+      unitText: item.unitText,
+      note: item.note,
+      unverified: item.unverified,
+    }));
+  }
+
+  private dtoFromStored(order: StoredOrder): UpsertOrderDocumentDto {
+    return {
+      customerName: order.customerName,
+      customerAddress: order.customerAddress ?? undefined,
+      taxOffice: order.taxOffice ?? undefined,
+      customerPhone: order.customerPhone ?? undefined,
+      taxNumber: order.taxNumber ?? undefined,
+      documentDateText: order.documentDateText ?? undefined,
+      vatRate: order.vatRate,
+      lines: order.lines.map((line) => ({
+        kind: line.kind as UpsertOrderDocumentDto['lines'][number]['kind'],
+        productId: line.productId ?? undefined,
+        productNameText: line.productNameText,
+        widthMm: line.widthMm ?? undefined,
+        lengthMm: line.lengthMm ?? undefined,
+        thicknessMm: line.thicknessMm ?? undefined,
+        decorText: line.decorText ?? undefined,
+        productionNote: line.productionNote ?? undefined,
+        quantity: line.quantity,
+        unitText: line.unitText,
+        discountRate: line.discountRate,
+        unitPrice: line.unitPrice,
+        priceSource: line.priceSource as UpsertOrderDocumentDto['lines'][number]['priceSource'],
+      })),
+    };
+  }
+
+  private detailFromStored(order: StoredOrder) {
+    return {
+      id: order.id,
+      orderNumber: order.orderNumber,
+      customerName: order.customerName,
+      customerAddress: order.customerAddress,
+      taxOffice: order.taxOffice,
+      customerPhone: order.customerPhone,
+      taxNumber: order.taxNumber,
+      documentDateText: order.documentDateText,
+      documentTitle: formatDocumentTitle(order.documentDateText),
+      vatRate: order.vatRate,
+      vatLabel: formatVatLabel(order.vatRate),
+      pricesAreVatExclusive: true as const,
+      grossTotal: order.grossTotal,
+      grossTotalDisplay: formatOrderMoney(order.grossTotal),
+      discountAmount: order.discountAmount,
+      discountAmountDisplay: formatOrderMoney(order.discountAmount),
+      netTotal: order.netTotal,
+      netTotalDisplay: formatOrderMoney(order.netTotal),
+      vatAmount: order.vatAmount,
+      vatAmountDisplay: formatOrderMoney(order.vatAmount),
+      grandTotal: order.grandTotal,
+      grandTotalDisplay: formatOrderMoney(order.grandTotal),
+      createdAt: toIsoString(order.createdAt),
+      updatedAt: toIsoString(order.updatedAt),
+      lines: order.lines.map((line) => ({
+        lineNo: line.lineNo,
+        kind: line.kind,
+        productId: line.productId,
+        productGroupCode: line.productGroupCode,
+        productGroupName: line.productGroupName,
+        catalogProductName: line.catalogProductName,
+        productNameText: line.productNameText,
+        widthMm: line.widthMm,
+        lengthMm: line.lengthMm,
+        thicknessMm: line.thicknessMm,
+        decorText: line.decorText,
+        productionNote: line.productionNote,
+        quantity: line.quantity,
+        unitText: line.unitText,
+        discountRate: line.discountRate,
+        unitPrice: line.unitPrice,
+        unitPriceDisplay: formatOrderMoney(line.unitPrice),
+        lineAmount: line.lineAmount,
+        lineAmountDisplay: formatOrderMoney(line.lineAmount),
+        lineDiscountAmount: line.lineDiscountAmount,
+        lineDiscountAmountDisplay: formatOrderMoney(line.lineDiscountAmount),
+        priceSource: line.priceSource,
+      })),
+      materialLines: order.materialLines.map((item) => ({
+        source: item.source,
+        lineNo: item.lineNo,
+        rawMaterialId: item.rawMaterialId,
+        materialNameText: item.materialNameText,
+        thicknessMm: item.thicknessMm,
+        sheetWidthMm: item.sheetWidthMm,
+        sheetLengthMm: item.sheetLengthMm,
+        surfaceType: item.surfaceType,
+        quantity: item.quantity,
+        pieceQuantity: item.pieceQuantity,
+        sheetQuantity: item.sheetQuantity,
+        netQtySnapshot: item.netQtySnapshot,
+        componentRole: item.componentRole,
+        unitText: item.unitText,
+        note: item.note,
+        unverified: item.unverified,
+      })),
+    };
+  }
+
+  private customerModelFromStored(order: StoredOrder): CustomerPrintModel {
+    return {
+      documentDateText: order.documentDateText,
+      customerName: order.customerName,
+      customerAddress: order.customerAddress,
+      taxOffice: order.taxOffice,
+      customerPhone: order.customerPhone,
+      taxNumber: order.taxNumber,
+      lines: order.lines.map((line) => ({
+        lineNo: line.lineNo,
+        productNameText: line.productNameText,
+        quantity: line.quantity,
+        unitText: line.unitText,
+        discountRate: line.discountRate,
+        unitPrice: line.unitPrice,
+        lineAmount: line.lineAmount,
+      })),
+      grossTotal: order.grossTotal,
+      discountAmount: order.discountAmount,
+      netTotal: order.netTotal,
+      vatLabel: formatVatLabel(order.vatRate),
+      vatAmount: order.vatAmount,
+      grandTotal: order.grandTotal,
+    };
+  }
+
+  private workshopModelFromStored(order: StoredOrder): WorkshopPrintModel {
+    const unverifiedByLine = new Map<number, string>();
+    for (const item of order.materialLines) {
+      if (item.unverified && item.lineNo != null && item.note) {
+        unverifiedByLine.set(item.lineNo, item.note);
+      }
+    }
+    return {
+      orderNumber: order.orderNumber,
+      documentDateText: order.documentDateText,
+      lines: order.lines.map((line) => ({
+        lineNo: line.lineNo,
+        productNameText: line.productNameText,
+        productKindText: joinText(line.productGroupName, line.catalogProductName),
+        sizeText: sizeText(line.widthMm ?? undefined, line.lengthMm ?? undefined),
+        thicknessText: line.thicknessMm ? `${trimDecimal(line.thicknessMm)} mm` : null,
+        decorText: line.decorText,
+        productionNote: line.productionNote,
+        quantity: line.quantity,
+        unitText: line.unitText,
+        materialMessage: unverifiedByLine.get(line.lineNo) ?? null,
+      })),
+      materials: order.materialLines.map((item) => ({
+        source: item.source as 'RECIPE' | 'MANUAL',
+        lineNo: item.lineNo,
+        rawMaterialId: item.rawMaterialId,
+        componentRole: item.componentRole,
+        materialNameText: item.materialNameText,
+        thicknessMm: item.thicknessMm,
+        sheetWidthMm: item.sheetWidthMm,
+        sheetLengthMm: item.sheetLengthMm,
+        surfaceType: item.surfaceType,
+        quantity: item.quantity,
+        pieceQuantity: item.pieceQuantity,
+        sheetQuantity: item.sheetQuantity,
+        unitText: item.unitText,
+        note: item.note,
+        unverified: item.unverified,
+      })),
     };
   }
 
@@ -990,4 +1481,20 @@ function sizeText(width: string | undefined, length: string | undefined): string
 
 function trimDecimal(value: string): string {
   return toDecimal(value).toFixed().replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+}
+
+function toIsoDate(value: Date | string | undefined): Date | null {
+  if (value == null) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return value;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function toIsoString(value: Date | string | undefined): string {
+  const date = toIsoDate(value) ?? new Date(0);
+  return date.toISOString();
 }

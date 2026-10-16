@@ -29,11 +29,8 @@ import {
 import { ApiError } from '../lib/api';
 import { formatPieceSizeCm } from '../lib/length';
 import {
+  COST_MATERIAL_PRICE_TYPE,
   friendlyMaterialPriceError,
-  materialPriceTypeLabel,
-  showsCardSalePrice,
-  showsCashSalePrice,
-  type MaterialPriceType,
 } from '../lib/material-price-type';
 import { formatPercentRate, formatTry } from '../lib/money';
 import { CitaCostList } from '../components/cita-cost-list';
@@ -154,16 +151,13 @@ function emptyExtraForm(): ExtraForm {
 export function CostCalculationPage({
   initialProductGroup = 'door_frame',
   initialSettingsOpen = false,
-  materialPriceType,
-  onMaterialPriceTypeChange,
   onOpenPriceList,
 }: {
   initialProductGroup?: ProductGroup;
   initialSettingsOpen?: boolean;
-  materialPriceType: MaterialPriceType;
-  onMaterialPriceTypeChange: (value: MaterialPriceType) => void;
   onOpenPriceList?: () => void;
 }) {
+  const materialPriceType = COST_MATERIAL_PRICE_TYPE;
   const [productGroup, setProductGroup] =
     useState<ProductGroup>(initialProductGroup);
   const [groupTabs, setGroupTabs] = useState<ProductGroupSummary[]>([]);
@@ -796,29 +790,9 @@ export function CostCalculationPage({
           </select>
         </label>
 
-        <div className="cc-price-type" role="group" aria-label="MDF alış fiyatı">
-          <span>MDF Alış Fiyatı</span>
-          <div className="cc-price-type-options">
-            <button
-              type="button"
-              className={materialPriceType === 'CASH' ? 'active' : undefined}
-              aria-pressed={materialPriceType === 'CASH'}
-              onClick={() => onMaterialPriceTypeChange('CASH')}
-            >
-              Nakit (Peşin Alış)
-            </button>
-            <button
-              type="button"
-              className={
-                materialPriceType === 'CARD_INSTALLMENT' ? 'active' : undefined
-              }
-              aria-pressed={materialPriceType === 'CARD_INSTALLMENT'}
-              onClick={() => onMaterialPriceTypeChange('CARD_INSTALLMENT')}
-            >
-              Kart / Taksitli Alış
-            </button>
-          </div>
-        </div>
+        <p className="cc-note cc-cost-source">
+          MDF maliyet kaynağı: Kart / Taksitli Alış
+        </p>
 
         <div className="cc-toolbar-actions">
           <button
@@ -905,8 +879,8 @@ export function CostCalculationPage({
           </div>
 
           <p className="cc-note">
-            Seçili MDF alış türü: {materialPriceTypeLabel(materialPriceType)}. İki
-            parça da bu türden hesaplanır.
+            MDF maliyet kaynağı: Kart / Taksitli Alış. İki parça da bu türden
+            hesaplanır.
           </p>
           {notice ? <div className="cc-notice">{notice}</div> : null}
           {error ? <div className="cc-alert">{error}</div> : null}
@@ -977,30 +951,24 @@ export function CostCalculationPage({
                         <span>Satış</span>
                       </span>
                     </th>
-                    {showsCashSalePrice(materialPriceType) ? (
-                      <>
-                        <th rowSpan={2} className="cc-th-final">
-                          <span className="cc-th-stack">
-                            Hesaplanan
-                            <span>Nakit</span>
-                          </span>
-                        </th>
-                        <th rowSpan={2} className="cc-th-final">
-                          <span className="cc-th-stack">
-                            Yayınlanan
-                            <span>Nakit</span>
-                          </span>
-                        </th>
-                      </>
-                    ) : null}
-                    {showsCardSalePrice(materialPriceType) ? (
-                      <th rowSpan={2} className="cc-th-final">
-                        <span className="cc-th-stack">
-                          Kart /
-                          <span>Taksit Satış</span>
-                        </span>
-                      </th>
-                    ) : null}
+                    <th rowSpan={2} className="cc-th-final">
+                      <span className="cc-th-stack">
+                        Hesaplanan
+                        <span>Nakit</span>
+                      </span>
+                    </th>
+                    <th rowSpan={2} className="cc-th-final">
+                      <span className="cc-th-stack">
+                        Yayınlanan
+                        <span>Nakit</span>
+                      </span>
+                    </th>
+                    <th rowSpan={2} className="cc-th-final">
+                      <span className="cc-th-stack">
+                        Kart /
+                        <span>Taksit Satış</span>
+                      </span>
+                    </th>
                     <th rowSpan={2} className="cc-th-action">
                       {' '}
                     </th>
@@ -1088,46 +1056,40 @@ export function CostCalculationPage({
                             {formatTry(row.pricing.roundedSalePrice)}
                           </span>
                         </td>
-                        {showsCashSalePrice(materialPriceType) ? (
-                          <>
-                            <td className="cc-money">
-                              <span className="cc-badge cc-badge-cash">
-                                {formatTry(
-                                  row.pricing.calculatedCashPrice ??
-                                    row.pricing.cashSalePrice,
-                                )}
-                              </span>
-                            </td>
-                            <td className="cc-money">
-                              <span
-                                className={
-                                  row.pricing.cashOverride
-                                    ? 'cc-badge cc-badge-published'
-                                    : 'cc-badge cc-badge-cash'
-                                }
-                              >
-                                {formatTry(
-                                  row.pricing.publishedCashPrice ??
-                                    row.pricing.cashSalePrice,
-                                )}
-                              </span>
-                            </td>
-                          </>
-                        ) : null}
-                        {showsCardSalePrice(materialPriceType) ? (
-                          <td className="cc-money">
-                            <span className="cc-badge cc-badge-card">
-                              {row.pricing.publishedCardPrice != null ||
-                              row.pricing.cardSalePrice != null
-                                ? formatTry(
-                                    row.pricing.publishedCardPrice ??
-                                      row.pricing.cardSalePrice,
-                                  )
-                                : (row.pricing.cardStatusMessage ??
-                                  'Kart/taksit oranı tanımlı değil')}
-                            </span>
-                          </td>
-                        ) : null}
+                        <td className="cc-money">
+                          <span className="cc-badge cc-badge-cash">
+                            {formatTry(
+                              row.pricing.calculatedCashPrice ??
+                                row.pricing.cashSalePrice,
+                            )}
+                          </span>
+                        </td>
+                        <td className="cc-money">
+                          <span
+                            className={
+                              row.pricing.cashOverride
+                                ? 'cc-badge cc-badge-published'
+                                : 'cc-badge cc-badge-cash'
+                            }
+                          >
+                            {formatTry(
+                              row.pricing.publishedCashPrice ??
+                                row.pricing.cashSalePrice,
+                            )}
+                          </span>
+                        </td>
+                        <td className="cc-money">
+                          <span className="cc-badge cc-badge-card">
+                            {row.pricing.publishedCardPrice != null ||
+                            row.pricing.cardSalePrice != null
+                              ? formatTry(
+                                  row.pricing.publishedCardPrice ??
+                                    row.pricing.cardSalePrice,
+                                )
+                              : (row.pricing.cardStatusMessage ??
+                                'Kart/taksit oranı tanımlı değil')}
+                          </span>
+                        </td>
                         <td className="cc-col-action">
                           <button
                             type="button"
@@ -1156,8 +1118,8 @@ export function CostCalculationPage({
                   <h2>{pervazProductLabel}</h2>
                   <p>{PERVAZ_PRODUCT_META[pervazProduct].description}</p>
                   <p className="cc-note">
-                    Seçili MDF alış türü: {materialPriceTypeLabel(materialPriceType)}.
-                    Ana parça ve kılçık bu türden hesaplanır.
+                    MDF maliyet kaynağı: Kart / Taksitli Alış. Ana parça ve kılçık
+                    bu türden hesaplanır.
                   </p>
                 </div>
                 <button
@@ -1292,7 +1254,6 @@ export function CostCalculationPage({
                       ? 'ayarli'
                       : 'dekoratif'
                   }
-                  materialPriceType={materialPriceType}
                   rows={filteredPervazRows}
                   onProfitSaved={(message) => {
                     setNotice(message);

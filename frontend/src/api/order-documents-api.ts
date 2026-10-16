@@ -1,4 +1,5 @@
-import { apiRequest } from '../lib/api';
+import { apiRequest, apiUrl, authHeaders } from '../lib/api';
+import { notifyUnauthorized } from '../lib/auth';
 import type { MaterialPriceType } from '../lib/material-price-type';
 
 export type OrderCatalog = {
@@ -229,7 +230,6 @@ export async function openOrderPrint(
   id: string,
   variant: 'customer-priced' | 'workshop-material' | 'combined',
 ) {
-  const apiUrl = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
   const label =
     variant === 'customer-priced'
       ? 'Müşteri formu'
@@ -238,10 +238,22 @@ export async function openOrderPrint(
         : 'Sipariş formu';
   let response: Response;
   try {
+    const headers = await authHeaders();
     response = await fetch(
       `${apiUrl}/order-documents/${id}/prints/${variant}.html?t=${Date.now()}`,
-      { cache: 'no-store' },
+      { cache: 'no-store', headers },
     );
+    if (response.status === 401) {
+      const retryHeaders = await authHeaders(true);
+      response = await fetch(
+        `${apiUrl}/order-documents/${id}/prints/${variant}.html?t=${Date.now()}`,
+        { cache: 'no-store', headers: retryHeaders },
+      );
+      if (response.status === 401) {
+        notifyUnauthorized();
+        throw new Error('Oturum geçersiz. Yeniden giriş yapın.');
+      }
+    }
   } catch {
     throw new Error(`Bağlantı kesildi. ${label} açılamadı. Kayıtlı sipariş duruyor.`);
   }

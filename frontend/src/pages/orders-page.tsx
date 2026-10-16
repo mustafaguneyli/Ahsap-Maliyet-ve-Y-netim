@@ -21,7 +21,6 @@ import {
 } from '../api/order-documents-api';
 import { listRawMaterials, type RawMaterial } from '../api/raw-materials-api';
 import { ApiError } from '../lib/api';
-import type { MaterialPriceType } from '../lib/material-price-type';
 import './orders-page.css';
 
 type DraftLine = {
@@ -178,7 +177,6 @@ export function OrdersPage() {
   const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>([]);
   const [recordedAuto, setRecordedAuto] = useState<OrderPreviewMaterial[]>([]);
   const [materialBaseline, setMaterialBaseline] = useState('');
-  const [suggestionBasis, setSuggestionBasis] = useState<MaterialPriceType>('CASH');
   const autoQuoteTimers = useRef<Map<string, number>>(new Map());
   const [preview, setPreview] = useState<OrderPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -610,7 +608,6 @@ export function OrdersPage() {
         widthMm: line.widthMm,
         lengthMm: line.lengthMm,
         thicknessMm: line.thicknessMm || undefined,
-        materialPriceType: suggestionBasis,
       });
       const applied = applySalePrice(
         line.saleType,
@@ -677,7 +674,6 @@ export function OrdersPage() {
           l.thicknessMm,
           l.saleType,
           l.priceManual,
-          suggestionBasis,
         ].join(':'),
       )
       .join('|'),
@@ -924,16 +920,6 @@ export function OrdersPage() {
         <label>
           KDV oranı %
           <input value={vatRate} onChange={(event) => setVatRate(event.target.value)} />
-        </label>
-        <label>
-          Maliyet hesabı MDF alış türü
-          <select
-            value={suggestionBasis}
-            onChange={(event) => setSuggestionBasis(event.target.value as MaterialPriceType)}
-          >
-            <option value="CASH">Peşin alış</option>
-            <option value="CARD_INSTALLMENT">Kart / taksitli alış</option>
-          </select>
         </label>
       </div>
 

@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import { IsIn, IsNotEmpty, IsOptional, Matches } from 'class-validator';
+import { transformDecimalString } from '../pricing-setting.validation';
 
 /**
  * Pervaz product-level profitRate + group-scope cardMarkupRate.
@@ -15,26 +16,20 @@ export class UpdateAyarliPervazPricingSettingDto {
   @Matches(/^\d+(\.\d{1,4})?$/, {
     message: 'Kâr oranı geçerli bir Decimal olmalıdır (örn. 15).',
   })
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.trim().replace(',', '.') : value,
-  )
+  @Transform(transformDecimalString)
   profitRate!: string;
 
   @IsOptional()
   @Matches(/^\d+(\.\d{1,4})?$/, {
     message: 'Kart / taksit farkı geçerli bir Decimal olmalıdır (örn. 20 veya 18.5).',
   })
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.trim().replace(',', '.') : value,
-  )
+  @Transform(transformDecimalString)
   cardMarkupRate?: string;
 
   @IsOptional()
   @Matches(/^\d+(\.\d{1,4})?$/, {
     message: 'Kart/taksit sabit farkı geçerli bir Decimal olmalıdır (örn. 2).',
   })
-  @Transform(({ value }) =>
-    typeof value === 'string' ? value.trim().replace(',', '.') : value,
-  )
+  @Transform(transformDecimalString)
   cardFixedSurchargeAmount?: string;
 }

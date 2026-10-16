@@ -1,13 +1,25 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import type { StoreTransaction } from '../../data-store/document-store';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { CheckConstraintError, UniqueConstraintError } from '../../data-store/store-errors';
+import { FIRESTORE_COLLECTIONS } from '../../firebase/firestore.collections';
 import { decimalToPrisma, toDecimal } from '../../common/decimal/decimal.util';
-import { AuditService } from '../audit/audit.service';
+import { AuditService, DEFAULT_AUDIT_ACTOR } from '../audit/audit.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { parseOptionalCardMarkupRate } from '../../calculation-engine/pricing/percent-card-sale';
-import { loadCardMarkupRate, resolveGroupCardMarkupRate } from './card-markup-rate.resolver';
+import {
+  loadCardMarkupRate,
+  resolveCardMarkupRateWithProductFallback,
+  resolveGroupCardMarkupRate,
+} from './card-markup-rate.resolver';
 import { UpdateProductPricingSettingDto } from './dto/update-product-pricing-setting.dto';
 import { UpdateAyarliPervazPricingSettingDto } from './dto/update-ayarli-pervaz-pricing-setting.dto';
 import { UpdateCitaPricingSettingDto } from './dto/update-cita-pricing-setting.dto';
@@ -103,6 +115,8 @@ export class PricingSettingsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
   async getDoorFrameProductSetting(
@@ -110,6 +124,11 @@ export class PricingSettingsService {
   ): Promise<ProductPricingSettingResponse> {
     const normalized = productCode.trim().toUpperCase();
     this.assertDoorFrameProductCode(normalized);
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () =>
+        this.getDoorFrameProductSettingFromCache(normalized),
+      );
+    }
 
     const { product, setting, group } = await this.requireActiveProductSetting(normalized);
     const groupRate = await this.readStoredGroupCardRate(this.prisma, group.id);
@@ -120,11 +139,17 @@ export class PricingSettingsService {
   }
 
   async getSupurgelikGroupSetting(): Promise<SupurgelikPricingSettingResponse> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () => this.getSupurgelikGroupSettingFromCache());
+    }
     const { group, setting } = await this.requireSupurgelikGroupSetting();
     return this.toSupurgelikResponse(group, setting);
   }
 
   async getCitaGroupSetting(): Promise<CitaPricingSettingResponse> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () => this.getCitaGroupSettingFromCache());
+    }
     const group = await this.prisma.productGroup.findUnique({
       where: { code: 'CITA' },
     });
@@ -163,6 +188,23 @@ export class PricingSettingsService {
       dto.cardMarkupRate,
       'Kart / taksit farkı',
     );
+    if (this.isFirestoreMode()) {
+      return this.runFirestoreWrite(async () => {
+        const group = this.requireActiveGroupFromCache('CITA');
+        const upserted = await this.upsertGroupCardMarkupRateOnFirestore(
+          { id: String(group.id), isActive: true, code: 'CITA' },
+          cardMarkupRate,
+          'Çıta kart/taksit oranı güncellemesi',
+        );
+        return {
+          productGroupCode: 'CITA' as const,
+          productGroupName: String(group.name),
+          settingId: upserted.settingId,
+          cardMarkupRate: upserted.rate,
+          isActive: true,
+        };
+      });
+    }
 
     const result = await this.prisma.$transaction(async (tx) => {
       const group = await tx.productGroup.findUnique({
@@ -194,6 +236,9 @@ export class PricingSettingsService {
    * Ürün kaydındaki legacy oran burada kaynak değildir.
    */
   async listGroupCardMarkupRates(): Promise<{ items: GroupCardMarkupRateItem[] }> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () => this.listGroupCardMarkupRatesFromCache());
+    }
     const groups = await this.prisma.productGroup.findMany({
       where: { isActive: true },
       orderBy: { name: 'asc' },
@@ -234,6 +279,11 @@ export class PricingSettingsService {
       dto.cardMarkupRate,
       'Kart / taksit farkı',
     );
+    if (this.isFirestoreMode()) {
+      return this.runFirestoreWrite(async () =>
+        this.replaceGroupCardMarkupRateOnFirestore(code, cardMarkupRate),
+      );
+    }
 
     const result = await this.prisma.$transaction(async (tx) => {
       const group = await tx.productGroup.findUnique({
@@ -287,6 +337,11 @@ export class PricingSettingsService {
       dto.cardMarkupRate != null && dto.cardMarkupRate !== ''
         ? this.parseNonNegativeRate(dto.cardMarkupRate, 'Kart / taksit farkı')
         : null;
+    if (this.isFirestoreMode()) {
+      return this.runFirestoreWrite(() =>
+        this.replaceSupurgelikGroupSettingOnFirestore(profitRate, requestedCardRate),
+      );
+    }
 
     const result = await this.prisma.$transaction(async (tx) => {
       const group = await tx.productGroup.findUnique({
@@ -421,6 +476,16 @@ export class PricingSettingsService {
     }
     if (profitRate.isNegative()) {
       throw new BadRequestException('Kâr oranı negatif olamaz.');
+    }
+    if (this.isFirestoreMode()) {
+      return this.runFirestoreWrite(() =>
+        this.replaceDoorFrameProductSettingOnFirestore(
+          normalized,
+          vatRate,
+          profitRate,
+          requestedCardRate,
+        ),
+      );
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -559,6 +624,11 @@ export class PricingSettingsService {
   ): Promise<PervazPricingSettingResponse> {
     const normalized = productCode.trim().toUpperCase();
     this.assertPervazProductCode(normalized);
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () =>
+        this.getPervazProductSettingFromCache(normalized),
+      );
+    }
     const { product, setting } =
       await this.requirePervazProductSetting(normalized);
     const groupRate = await loadCardMarkupRate(this.prisma, 'PERVAZ');
@@ -589,6 +659,11 @@ export class PricingSettingsService {
     ) {
       throw new BadRequestException(
         'DEKORATIF_PERVAZ_GENIS_KILCIK için doğrulanmış kart fiyatı bulunmuyor.',
+      );
+    }
+    if (this.isFirestoreMode()) {
+      return this.runFirestoreWrite(() =>
+        this.replacePervazProductSettingOnFirestore(normalized, profitRate, requestedCardRate),
       );
     }
 
@@ -728,6 +803,11 @@ export class PricingSettingsService {
     const profitRate = toDecimal(dto.profitRate);
     if (profitRate.isNegative()) {
       throw new BadRequestException('Kâr oranı negatif olamaz.');
+    }
+    if (this.isFirestoreMode()) {
+      return this.runFirestoreWrite(() =>
+        this.replaceAyarliPervazProductSettingOnFirestore(dto, profitRate),
+      );
     }
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -1058,6 +1138,235 @@ export class PricingSettingsService {
     };
   }
 
+  private getDoorFrameProductSettingFromCache(
+    productCode: string,
+  ): ProductPricingSettingResponse {
+    const cache = currentCatalogCache();
+    if (!cache) {
+      throw new NotFoundException('Ürün grubu bulunamadı: door_frame');
+    }
+    const group = cache.groupByCode('door_frame');
+    if (!group) {
+      throw new NotFoundException('Ürün grubu bulunamadı: door_frame');
+    }
+    const product = cache.productByGroupAndCode(String(group.id), productCode);
+    if (!product) {
+      throw new NotFoundException(`Kapı Kasası ürünü bulunamadı: ${productCode}`);
+    }
+    const settingRows = cache.pricingSettings({
+      productId: String(product.id),
+      productGroupId: null,
+    });
+    const setting = settingRows[0];
+    if (!setting) {
+      throw new NotFoundException(
+        `${productCode} için aktif Product-level PricingSetting bulunamadı.`,
+      );
+    }
+    const groupRate = resolveGroupCardMarkupRate(
+      cache.pricingSettings({ productGroupId: String(group.id), productId: null }).map((row) => ({
+        isActive: row.isActive === true,
+        productGroupId: row.productGroupId == null ? null : String(row.productGroupId),
+        productId: row.productId == null ? null : String(row.productId),
+        cardMarkupRate: row.cardMarkupRate == null ? null : String(row.cardMarkupRate),
+      })),
+    );
+    return this.toResponse(
+      { code: String(product.code), name: String(product.name) },
+      {
+        id: String(setting.id),
+        vatRate: setting.vatRate == null ? null : { toString: () => String(setting.vatRate) },
+        profitRate: setting.profitRate == null ? null : { toString: () => String(setting.profitRate) },
+        cardMarkupRate:
+          setting.cardMarkupRate == null ? null : { toString: () => String(setting.cardMarkupRate) },
+        isActive: setting.isActive === true,
+      },
+      groupRate,
+    );
+  }
+
+  private getSupurgelikGroupSettingFromCache(): SupurgelikPricingSettingResponse {
+    const cache = currentCatalogCache();
+    const group = cache?.groupByCode('SUPURGELIK');
+    if (!group) {
+      throw new NotFoundException('Ürün grubu bulunamadı: SUPURGELIK');
+    }
+    const settings = cache!.pricingSettings({
+      productGroupId: String(group.id),
+      productId: null,
+    });
+    if (settings.length > 1) {
+      throw new BadRequestException(
+        'SUPURGELIK için birden fazla aktif group-scope PricingSetting bulundu.',
+      );
+    }
+    const setting = settings[0];
+    if (setting?.profitRate == null) {
+      throw new NotFoundException('SUPURGELIK için aktif group-scope profitRate bulunamadı.');
+    }
+    return this.toSupurgelikResponse(
+      { name: String(group.name) },
+      {
+        id: String(setting.id),
+        vatRate: setting.vatRate == null ? null : { toString: () => String(setting.vatRate) },
+        profitRate: { toString: () => String(setting.profitRate) },
+        cardMarkupRate:
+          setting.cardMarkupRate == null ? null : { toString: () => String(setting.cardMarkupRate) },
+        cardFixedSurchargeAmount:
+          setting.cardFixedSurchargeAmount == null
+            ? null
+            : { toString: () => String(setting.cardFixedSurchargeAmount) },
+        isActive: setting.isActive === true,
+      },
+    );
+  }
+
+  private getCitaGroupSettingFromCache(): CitaPricingSettingResponse {
+    const cache = currentCatalogCache();
+    const group = cache?.groupByCode('CITA');
+    if (!group?.isActive) {
+      throw new NotFoundException('Ürün grubu bulunamadı: CITA');
+    }
+    const settings = cache!.pricingSettings({
+      productGroupId: String(group.id),
+      productId: null,
+    });
+    if (settings.length > 1) {
+      throw new BadRequestException(
+        'CITA için birden fazla aktif group-scope PricingSetting bulundu.',
+      );
+    }
+    const setting = settings[0] ?? null;
+    return {
+      productGroupCode: 'CITA',
+      productGroupName: String(group.name),
+      settingId: setting ? String(setting.id) : null,
+      cardMarkupRate: setting?.cardMarkupRate == null ? null : String(setting.cardMarkupRate),
+      isActive: setting?.isActive === true,
+    };
+  }
+
+  private getPervazProductSettingFromCache(
+    productCode: PervazPricingSettingResponse['productCode'],
+  ): PervazPricingSettingResponse {
+    const cache = currentCatalogCache();
+    const group = cache?.groupByCode('PERVAZ');
+    if (!group) {
+      throw new NotFoundException('Ürün grubu bulunamadı: PERVAZ');
+    }
+    const product = cache!.productByGroupAndCode(String(group.id), productCode);
+    if (!product) {
+      throw new NotFoundException(`Pervaz ürünü bulunamadı: ${productCode}`);
+    }
+    const settings = cache!.pricingSettings({
+      productId: String(product.id),
+      productGroupId: null,
+    });
+    const setting = settings[0];
+    if (!setting?.profitRate) {
+      throw new NotFoundException(`${productCode} için aktif product-level profitRate bulunamadı.`);
+    }
+    const groupRate = resolveGroupCardMarkupRate(
+      cache!.pricingSettings({ productGroupId: String(group.id), productId: null }).map((row) => ({
+        isActive: row.isActive === true,
+        cardMarkupRate: row.cardMarkupRate == null ? null : String(row.cardMarkupRate),
+      })),
+    );
+    return this.toPervazResponse(
+      { code: String(product.code), name: String(product.name) },
+      {
+        id: String(setting.id),
+        profitRate: { toString: () => String(setting.profitRate) },
+        cardFixedSurchargeAmount:
+          setting.cardFixedSurchargeAmount == null
+            ? null
+            : { toString: () => String(setting.cardFixedSurchargeAmount) },
+        isActive: setting.isActive === true,
+      },
+      groupRate,
+    );
+  }
+
+  private getDoorBuildGroupSettingFromCache(): DoorBuildPricingSettingResponse {
+    const cache = currentCatalogCache();
+    const group = cache?.groupByCode(DOOR_BUILD_PRODUCT_GROUP_CODE);
+    if (!group) {
+      return {
+        productGroupCode: 'KAPI_IMALATI',
+        productGroupName: DOOR_BUILD_PRODUCT_GROUP_NAME,
+        settingId: null,
+        vatRate: null,
+        profitRate: null,
+        cardMarkupRate: null,
+        isActive: false,
+      };
+    }
+    const settings = cache!.pricingSettings({
+      productGroupId: String(group.id),
+      productId: null,
+    });
+    if (settings.length > 1) {
+      throw new BadRequestException(
+        'KAPI_IMALATI için birden fazla aktif group-scope PricingSetting bulundu.',
+      );
+    }
+    const setting = settings[0] ?? null;
+    return {
+      productGroupCode: 'KAPI_IMALATI',
+      productGroupName: String(group.name),
+      settingId: setting ? String(setting.id) : null,
+      vatRate: setting?.vatRate == null ? null : String(setting.vatRate),
+      profitRate: setting?.profitRate == null ? null : String(setting.profitRate),
+      cardMarkupRate: setting?.cardMarkupRate == null ? null : String(setting.cardMarkupRate),
+      isActive: group.isActive === true && (setting?.isActive === true),
+    };
+  }
+
+  private listGroupCardMarkupRatesFromCache(): { items: GroupCardMarkupRateItem[] } {
+    const cache = currentCatalogCache();
+    if (!cache) {
+      return { items: [] };
+    }
+    const groups = cache
+      .activeGroups()
+      .slice()
+      .sort((a, b) => String(a.name).localeCompare(String(b.name), 'tr'));
+    const items: GroupCardMarkupRateItem[] = groups.map((group) => {
+      const settings = cache.pricingSettings({
+        productGroupId: String(group.id),
+        productId: null,
+      });
+      const cardMarkupRate = resolveGroupCardMarkupRate(
+        settings.map((row) => ({
+          isActive: row.isActive === true,
+          cardMarkupRate: row.cardMarkupRate == null ? null : String(row.cardMarkupRate),
+        })),
+      );
+      let productCardMarkupRate: string | null = null;
+      if (group.code === 'door_frame') {
+        const products = cache.productsByGroup(String(group.id));
+        for (const product of products) {
+          const productSettings = cache.pricingSettings({
+            productId: String(product.id),
+            productGroupId: null,
+          });
+          productCardMarkupRate = resolveCardMarkupRateWithProductFallback([], productSettings.map((row) => ({
+            isActive: row.isActive === true,
+            cardMarkupRate: row.cardMarkupRate == null ? null : String(row.cardMarkupRate),
+          })));
+          if (productCardMarkupRate) break;
+        }
+      }
+      return {
+        productGroupCode: String(group.code),
+        productGroupName: String(group.name),
+        cardMarkupRate,
+        productCardMarkupRate,
+      };
+    });
+    return { items };
+  }
+
   private toResponse(
     product: { code: string; name: string },
     setting: {
@@ -1131,14 +1440,27 @@ export class PricingSettingsService {
     return [...rates][0] ?? null;
   }
 
-  private parseNonNegativeRate(raw: string, label: string) {
+  private parseNonNegativeRate(raw: unknown, label: string) {
+    let normalized = raw;
+    if (typeof raw === 'number') {
+      if (!Number.isFinite(raw)) {
+        throw new BadRequestException(`${label} geçerli bir Decimal olmalıdır.`);
+      }
+      normalized = String(raw);
+    }
+    if (typeof normalized !== 'string') {
+      throw new BadRequestException(`${label} geçerli bir Decimal olmalıdır.`);
+    }
     let rate;
     try {
-      rate = toDecimal(raw);
+      rate = toDecimal(normalized);
     } catch {
       throw new BadRequestException(`${label} geçerli bir Decimal olmalıdır.`);
     }
-    if (!rate.isFinite() || rate.isNegative()) {
+    if (!rate.isFinite()) {
+      throw new BadRequestException(`${label} geçerli bir Decimal olmalıdır.`);
+    }
+    if (rate.isNegative()) {
       throw new BadRequestException(`${label} negatif olamaz.`);
     }
     return rate;
@@ -1262,6 +1584,9 @@ export class PricingSettingsService {
    * Oran yoksa null döner; başka gruptan kopyalamaz.
    */
   async getDoorBuildGroupSetting(): Promise<DoorBuildPricingSettingResponse> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore) {
+      return withCatalogCache(this.firestoreStore, () => this.getDoorBuildGroupSettingFromCache());
+    }
     const group = await this.prisma.productGroup.findUnique({
       where: { code: DOOR_BUILD_PRODUCT_GROUP_CODE },
     });
@@ -1318,6 +1643,11 @@ export class PricingSettingsService {
       dto.cardMarkupRate != null && dto.cardMarkupRate !== ''
         ? this.parseNonNegativeRate(dto.cardMarkupRate, 'Kart / taksit oranı')
         : null;
+    if (this.isFirestoreMode()) {
+      return this.runFirestoreWrite(() =>
+        this.replaceDoorBuildGroupSettingOnFirestore(profitRate, vatRate, cardMarkupRate),
+      );
+    }
 
     const result = await this.prisma.$transaction(async (tx) => {
       await seedDoorBuildProductGroup(tx as never);
@@ -1425,5 +1755,655 @@ export class PricingSettingsService {
       cardMarkupRate: result.setting!.cardMarkupRate?.toString() ?? null,
       isActive: true,
     };
+  }
+
+  private isFirestoreMode(): boolean {
+    return Boolean(this.dataStore?.isFirestore() && this.firestoreStore);
+  }
+
+  private rethrowStore(error: unknown): never {
+    if (error instanceof UniqueConstraintError) {
+      throw new ConflictException(error.message);
+    }
+    if (error instanceof CheckConstraintError) {
+      throw new BadRequestException(error.message);
+    }
+    throw error;
+  }
+
+  private async runFirestoreWrite<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await withCatalogCache(this.firestoreStore, fn);
+    } catch (error) {
+      this.rethrowStore(error);
+    }
+  }
+
+  private requireActiveGroupFromCache(code: string): Record<string, unknown> {
+    const cache = currentCatalogCache();
+    const group = cache?.groupByCode(code);
+    if (!group || group.isActive !== true) {
+      throw new NotFoundException(`Ürün grubu bulunamadı: ${code}`);
+    }
+    return group;
+  }
+
+  private moneyText(value: unknown): string | null {
+    if (value == null || value === '') {
+      return null;
+    }
+    return String(value);
+  }
+
+  private uniqueActiveGroupSettings(groupId: string, code: string): Record<string, unknown>[] {
+    const cache = currentCatalogCache();
+    const rows = cache?.pricingSettings({ productGroupId: groupId, productId: null }) ?? [];
+    if (rows.length > 1) {
+      throw new BadRequestException(
+        `${code} için birden fazla aktif group-scope PricingSetting bulundu.`,
+      );
+    }
+    return rows;
+  }
+
+  private groupCardRateFromCache(groupId: string): string | null {
+    return resolveGroupCardMarkupRate(
+      this.uniqueActiveGroupSettings(groupId, groupId).map((row) => ({
+        isActive: row.isActive === true,
+        cardMarkupRate: this.moneyText(row.cardMarkupRate),
+      })),
+    );
+  }
+
+  private doorFrameProductCardRateFromCache(groupId: string): string | null {
+    const cache = currentCatalogCache();
+    if (!cache) {
+      return null;
+    }
+    const products = cache.productsByGroup(groupId);
+    const rates = new Set<string>();
+    for (const product of products) {
+      const settings = cache.pricingSettings({
+        productId: String(product.id),
+        productGroupId: null,
+      });
+      for (const setting of settings) {
+        const rate = parseOptionalCardMarkupRate(this.moneyText(setting.cardMarkupRate));
+        if (rate != null) {
+          rates.add(rate.toFixed());
+        }
+      }
+    }
+    if (rates.size !== 1) {
+      return null;
+    }
+    return [...rates][0] ?? null;
+  }
+
+  private async writePricingAudit(
+    tx: StoreTransaction,
+    input: {
+      entityId: string;
+      action: 'CREATE' | 'UPDATE';
+      fieldName: string;
+      oldValue: string | null;
+      newValue: string | null;
+      reason: string;
+    },
+  ): Promise<void> {
+    const store = this.firestoreStore!;
+    const auditId = store.createId();
+    await tx.upsert(FIRESTORE_COLLECTIONS.auditEvents, auditId, {
+      id: auditId,
+      entityType: PRICING_ENTITY_TYPE,
+      entityId: input.entityId,
+      action: input.action,
+      fieldName: input.fieldName,
+      oldValue: input.oldValue,
+      newValue: input.newValue,
+      reason: input.reason,
+      actor: DEFAULT_AUDIT_ACTOR,
+    });
+  }
+
+  private async replaceGroupCardMarkupRateOnFirestore(
+    code: string,
+    cardMarkupRate: ReturnType<typeof toDecimal>,
+  ): Promise<GroupCardMarkupRateItem> {
+    const group = this.requireActiveGroupFromCache(code);
+    const upserted = await this.upsertGroupCardMarkupRateOnFirestore(
+      { id: String(group.id), isActive: true, code },
+      cardMarkupRate,
+      `${String(group.name)} kart/taksit oranı güncellemesi`,
+    );
+    return {
+      productGroupCode: String(group.code),
+      productGroupName: String(group.name),
+      cardMarkupRate: upserted.rate,
+      productCardMarkupRate:
+        code === 'door_frame' ? this.doorFrameProductCardRateFromCache(String(group.id)) : null,
+    };
+  }
+
+  private async upsertGroupCardMarkupRateOnFirestore(
+    group: { id: string; isActive: boolean; code: string },
+    rate: ReturnType<typeof toDecimal>,
+    reason: string,
+    fallbackRate?: string | null,
+    tx?: StoreTransaction,
+  ): Promise<{ rate: string; changed: boolean; settingId: string | null }> {
+    const active = this.uniqueActiveGroupSettings(group.id, group.code);
+    const current = active[0] ?? null;
+    const currentRate = this.moneyText(current?.cardMarkupRate);
+    if (currentRate != null && toDecimal(currentRate).equals(rate)) {
+      return { rate: rate.toFixed(), changed: false, settingId: String(current!.id) };
+    }
+    if (
+      currentRate == null &&
+      fallbackRate != null &&
+      fallbackRate !== '' &&
+      toDecimal(fallbackRate).equals(rate)
+    ) {
+      return { rate: rate.toFixed(), changed: false, settingId: current ? String(current.id) : null };
+    }
+
+    assertPricingSetting({
+      productGroupId: group.id,
+      productId: null,
+      vatRate: this.moneyText(current?.vatRate),
+      profitRate: this.moneyText(current?.profitRate),
+      cardMarkupRate: rate.toString(),
+      cardFixedSurchargeAmount: null,
+      productGroupIsActive: group.isActive,
+    });
+
+    const write = async (inner: StoreTransaction) => {
+      const store = this.firestoreStore!;
+      if (current) {
+        await inner.upsert(FIRESTORE_COLLECTIONS.pricingSettings, String(current.id), {
+          ...current,
+          isActive: false,
+        });
+        await this.writePricingAudit(inner, {
+          entityId: String(current.id),
+          action: 'UPDATE',
+          fieldName: 'isActive',
+          oldValue: 'true',
+          newValue: 'false',
+          reason: `Yeni PricingSetting için eski aktif kayıt kapatıldı (${group.code})`,
+        });
+      }
+      const createdId = store.createId();
+      await inner.upsert(FIRESTORE_COLLECTIONS.pricingSettings, createdId, {
+        id: createdId,
+        productGroupId: group.id,
+        productId: null,
+        vatRate: current?.vatRate ?? null,
+        profitRate: current?.profitRate ?? null,
+        cardMarkupRate: rate.toFixed(4),
+        cardFixedSurchargeAmount: null,
+        isActive: true,
+      });
+      await this.writePricingAudit(inner, {
+        entityId: createdId,
+        action: 'CREATE',
+        fieldName: 'cardMarkupRate',
+        oldValue: currentRate ?? fallbackRate ?? null,
+        newValue: rate.toFixed(4),
+        reason,
+      });
+      return { rate: rate.toFixed(), changed: true, settingId: createdId };
+    };
+
+    if (tx) {
+      return write(tx);
+    }
+    return this.firestoreStore!.runTransaction(write);
+  }
+
+  private async deactivatePricingSettingOnFirestore(
+    tx: StoreTransaction,
+    current: Record<string, unknown>,
+    reason: string,
+  ): Promise<void> {
+    await tx.upsert(FIRESTORE_COLLECTIONS.pricingSettings, String(current.id), {
+      ...current,
+      isActive: false,
+    });
+    await this.writePricingAudit(tx, {
+      entityId: String(current.id),
+      action: 'UPDATE',
+      fieldName: 'isActive',
+      oldValue: 'true',
+      newValue: 'false',
+      reason,
+    });
+  }
+
+  private async replaceSupurgelikGroupSettingOnFirestore(
+    profitRate: ReturnType<typeof toDecimal>,
+    requestedCardRate: ReturnType<typeof toDecimal> | null,
+  ): Promise<SupurgelikPricingSettingResponse> {
+    const group = this.requireActiveGroupFromCache('SUPURGELIK');
+    const current = this.uniqueActiveGroupSettings(String(group.id), 'SUPURGELIK')[0] ?? null;
+    const nextCardRate =
+      requestedCardRate ??
+      (this.moneyText(current?.cardMarkupRate) != null
+        ? toDecimal(this.moneyText(current?.cardMarkupRate)!)
+        : null);
+    const profitUnchanged =
+      this.moneyText(current?.profitRate) != null &&
+      toDecimal(this.moneyText(current?.profitRate)!).equals(profitRate);
+    const cardUnchanged = this.ratesEqual(this.moneyText(current?.cardMarkupRate), nextCardRate);
+    if (profitUnchanged && cardUnchanged && current) {
+      return this.toSupurgelikResponse(
+        { name: String(group.name) },
+        {
+          id: String(current.id),
+          vatRate: this.asRateBox(current.vatRate),
+          profitRate: this.asRateBox(current.profitRate),
+          cardMarkupRate: this.asRateBox(current.cardMarkupRate),
+          cardFixedSurchargeAmount: this.asRateBox(current.cardFixedSurchargeAmount),
+          isActive: true,
+        },
+      );
+    }
+
+    assertPricingSetting({
+      productGroupId: String(group.id),
+      productId: null,
+      vatRate: this.moneyText(current?.vatRate),
+      profitRate: profitRate.toString(),
+      cardMarkupRate: nextCardRate?.toString() ?? null,
+      cardFixedSurchargeAmount:
+        nextCardRate != null ? null : this.moneyText(current?.cardFixedSurchargeAmount),
+      productGroupIsActive: true,
+    });
+
+    const createdId = await this.firestoreStore!.runTransaction(async (tx) => {
+      if (current) {
+        await this.deactivatePricingSettingOnFirestore(
+          tx,
+          current,
+          'Yeni PricingSetting için eski aktif kayıt kapatıldı (SUPURGELIK)',
+        );
+      }
+      const id = this.firestoreStore!.createId();
+      await tx.upsert(FIRESTORE_COLLECTIONS.pricingSettings, id, {
+        id,
+        productGroupId: String(group.id),
+        productId: null,
+        vatRate: current?.vatRate ?? null,
+        profitRate: profitRate.toFixed(4),
+        cardMarkupRate: nextCardRate == null ? null : nextCardRate.toFixed(4),
+        cardFixedSurchargeAmount:
+          nextCardRate != null ? null : (current?.cardFixedSurchargeAmount ?? null),
+        isActive: true,
+      });
+      await this.writePricingAudit(tx, {
+        entityId: id,
+        action: 'CREATE',
+        fieldName: cardUnchanged
+          ? 'profitRate'
+          : profitUnchanged
+            ? 'cardMarkupRate'
+            : 'profitRate,cardMarkupRate',
+        oldValue: current
+          ? `profit=${this.moneyText(current.profitRate) ?? 'null'};card=${this.moneyText(current.cardMarkupRate) ?? 'null'}`
+          : null,
+        newValue: `profit=${profitRate.toFixed(4)};card=${nextCardRate?.toFixed(4) ?? 'null'}`,
+        reason: 'Süpürgelik group-scope fiyatlandırma güncellemesi',
+      });
+      return id;
+    });
+
+    return this.toSupurgelikResponse(
+      { name: String(group.name) },
+      {
+        id: createdId,
+        vatRate: this.asRateBox(current?.vatRate),
+        profitRate: { toString: () => profitRate.toString() },
+        cardMarkupRate: nextCardRate == null ? null : { toString: () => nextCardRate.toString() },
+        cardFixedSurchargeAmount:
+          nextCardRate != null ? null : this.asRateBox(current?.cardFixedSurchargeAmount),
+        isActive: true,
+      },
+    );
+  }
+
+  private async replaceDoorFrameProductSettingOnFirestore(
+    productCode: string,
+    vatRate: ReturnType<typeof toDecimal>,
+    profitRate: ReturnType<typeof toDecimal>,
+    requestedCardRate: ReturnType<typeof toDecimal> | null,
+  ): Promise<ProductPricingSettingResponse> {
+    const cache = currentCatalogCache();
+    const group = this.requireActiveGroupFromCache('door_frame');
+    const product = cache?.productByGroupAndCode(String(group.id), productCode);
+    if (!product || product.isActive !== true) {
+      throw new NotFoundException(`Kapı Kasası ürünü bulunamadı: ${productCode}`);
+    }
+    const current =
+      cache?.pricingSettings({ productId: String(product.id), productGroupId: null })[0] ?? null;
+    const store = this.firestoreStore!;
+
+    const result = await store.runTransaction(async (tx) => {
+      const groupCard = requestedCardRate
+        ? await this.upsertGroupCardMarkupRateOnFirestore(
+            { id: String(group.id), isActive: true, code: 'door_frame' },
+            requestedCardRate,
+            `Kapı Kasası kart/taksit oranı güncellemesi (${productCode})`,
+            this.moneyText(current?.cardMarkupRate),
+            tx,
+          )
+        : { rate: this.groupCardRateFromCache(String(group.id)), changed: false, settingId: null };
+      const storedGroupRate = requestedCardRate ? groupCard.rate : groupCard.rate;
+      const productUnchanged =
+        this.moneyText(current?.vatRate) != null &&
+        this.moneyText(current?.profitRate) != null &&
+        toDecimal(this.moneyText(current?.vatRate)!).equals(vatRate) &&
+        toDecimal(this.moneyText(current?.profitRate)!).equals(profitRate);
+      if (productUnchanged && current && !groupCard.changed) {
+        return { setting: current, groupRate: storedGroupRate };
+      }
+      if (productUnchanged && current) {
+        return { setting: current, groupRate: storedGroupRate };
+      }
+
+      assertPricingSetting({
+        productGroupId: null,
+        productId: String(product.id),
+        vatRate: vatRate.toString(),
+        profitRate: profitRate.toString(),
+        cardMarkupRate: this.moneyText(current?.cardMarkupRate),
+        cardFixedSurchargeAmount: null,
+        productIsActive: true,
+      });
+
+      if (current) {
+        await this.deactivatePricingSettingOnFirestore(
+          tx,
+          current,
+          `Yeni PricingSetting için eski aktif kayıt kapatıldı (${productCode})`,
+        );
+      }
+      const createdId = store.createId();
+      const created = {
+        id: createdId,
+        productGroupId: null,
+        productId: String(product.id),
+        vatRate: vatRate.toFixed(4),
+        profitRate: profitRate.toFixed(4),
+        cardMarkupRate: current?.cardMarkupRate ?? null,
+        cardFixedSurchargeAmount: null,
+        isActive: true,
+      };
+      await tx.upsert(FIRESTORE_COLLECTIONS.pricingSettings, createdId, created);
+      await this.writePricingAudit(tx, {
+        entityId: createdId,
+        action: 'CREATE',
+        fieldName: 'vatRate,profitRate',
+        oldValue: current
+          ? `vat=${this.moneyText(current.vatRate) ?? 'null'};profit=${this.moneyText(current.profitRate) ?? 'null'}`
+          : null,
+        newValue: `vat=${vatRate.toFixed(4)};profit=${profitRate.toFixed(4)}`,
+        reason: `Kapı Kasası fiyatlandırma güncellemesi (${productCode})`,
+      });
+      return { setting: created, groupRate: storedGroupRate };
+    });
+
+    return this.toResponse(
+      { code: String(product.code), name: String(product.name) },
+      {
+        id: String(result.setting.id),
+        vatRate: this.asRateBox(result.setting.vatRate) ?? { toString: () => vatRate.toString() },
+        profitRate:
+          this.asRateBox(result.setting.profitRate) ?? { toString: () => profitRate.toString() },
+        cardMarkupRate: this.asRateBox(result.setting.cardMarkupRate),
+        isActive: true,
+      },
+      result.groupRate,
+    );
+  }
+
+  private async replacePervazProductSettingOnFirestore(
+    productCode: PervazPricingSettingResponse['productCode'],
+    profitRate: ReturnType<typeof toDecimal>,
+    requestedCardRate: ReturnType<typeof toDecimal> | null,
+  ): Promise<PervazPricingSettingResponse> {
+    const cache = currentCatalogCache();
+    const group = this.requireActiveGroupFromCache('PERVAZ');
+    const product = cache?.productByGroupAndCode(String(group.id), productCode);
+    if (!product || product.isActive !== true) {
+      throw new NotFoundException(`Pervaz ürünü bulunamadı: ${productCode}`);
+    }
+    const current =
+      cache?.pricingSettings({ productId: String(product.id), productGroupId: null })[0] ?? null;
+    const store = this.firestoreStore!;
+
+    const result = await store.runTransaction(async (tx) => {
+      const groupCard =
+        requestedCardRate == null
+          ? {
+              rate: this.groupCardRateFromCache(String(group.id)),
+              changed: false,
+            }
+          : await this.upsertGroupCardMarkupRateOnFirestore(
+              { id: String(group.id), isActive: true, code: 'PERVAZ' },
+              requestedCardRate,
+              `Pervaz kart/taksit oranı güncellemesi (${productCode})`,
+              undefined,
+              tx,
+            );
+      const preservedCardFixed = this.moneyText(current?.cardFixedSurchargeAmount);
+      const profitUnchanged =
+        this.moneyText(current?.profitRate) != null &&
+        toDecimal(this.moneyText(current?.profitRate)!).equals(profitRate);
+      if (profitUnchanged && current) {
+        return { setting: current, groupRate: groupCard.rate };
+      }
+      assertPricingSetting({
+        productGroupId: null,
+        productId: String(product.id),
+        vatRate: null,
+        profitRate: profitRate.toString(),
+        cardMarkupRate: null,
+        cardFixedSurchargeAmount: preservedCardFixed,
+        productIsActive: true,
+      });
+      if (current) {
+        await this.deactivatePricingSettingOnFirestore(
+          tx,
+          current,
+          `Yeni PricingSetting için eski aktif kayıt kapatıldı (${productCode})`,
+        );
+      }
+      const createdId = store.createId();
+      const created = {
+        id: createdId,
+        productGroupId: null,
+        productId: String(product.id),
+        vatRate: null,
+        profitRate: profitRate.toFixed(4),
+        cardMarkupRate: null,
+        cardFixedSurchargeAmount: current?.cardFixedSurchargeAmount ?? null,
+        isActive: true,
+      };
+      await tx.upsert(FIRESTORE_COLLECTIONS.pricingSettings, createdId, created);
+      await this.writePricingAudit(tx, {
+        entityId: createdId,
+        action: 'CREATE',
+        fieldName: 'profitRate',
+        oldValue: current ? `profit=${this.moneyText(current.profitRate) ?? 'null'}` : null,
+        newValue: `profit=${profitRate.toFixed(4)}`,
+        reason: `Pervaz fiyatlandırma güncellemesi (${productCode})`,
+      });
+      return { setting: created, groupRate: groupCard.rate };
+    });
+
+    return this.toPervazResponse(
+      { code: String(product.code), name: String(product.name) },
+      {
+        id: String(result.setting.id),
+        profitRate:
+          this.asRateBox(result.setting.profitRate) ?? { toString: () => profitRate.toString() },
+        cardFixedSurchargeAmount: this.asRateBox(result.setting.cardFixedSurchargeAmount),
+        isActive: true,
+      },
+      result.groupRate,
+    );
+  }
+
+  private async replaceAyarliPervazProductSettingOnFirestore(
+    dto: UpdateAyarliPervazPricingSettingDto,
+    profitRate: ReturnType<typeof toDecimal>,
+  ): Promise<AyarliPervazPricingSettingResponse> {
+    const cache = currentCatalogCache();
+    const group = this.requireActiveGroupFromCache('PERVAZ');
+    const product = cache?.productByGroupAndCode(String(group.id), 'AYARLI_PERVAZ');
+    if (!product || product.isActive !== true) {
+      throw new NotFoundException('Pervaz ürünü bulunamadı: AYARLI_PERVAZ');
+    }
+    const current =
+      cache?.pricingSettings({ productId: String(product.id), productGroupId: null })[0] ?? null;
+    const preservedCardFixed = this.moneyText(current?.cardFixedSurchargeAmount);
+    const nextCardFixed =
+      dto.cardFixedSurchargeAmount != null && dto.cardFixedSurchargeAmount !== ''
+        ? toDecimal(dto.cardFixedSurchargeAmount).toString()
+        : preservedCardFixed;
+    assertPricingSetting({
+      productGroupId: null,
+      productId: String(product.id),
+      vatRate: null,
+      profitRate: profitRate.toString(),
+      cardMarkupRate: null,
+      cardFixedSurchargeAmount: nextCardFixed,
+      productIsActive: true,
+    });
+    const createdId = await this.firestoreStore!.runTransaction(async (tx) => {
+      if (current) {
+        await this.deactivatePricingSettingOnFirestore(
+          tx,
+          current,
+          'Yeni PricingSetting için eski aktif kayıt kapatıldı (AYARLI_PERVAZ)',
+        );
+      }
+      const id = this.firestoreStore!.createId();
+      await tx.upsert(FIRESTORE_COLLECTIONS.pricingSettings, id, {
+        id,
+        productGroupId: null,
+        productId: String(product.id),
+        vatRate: null,
+        profitRate: profitRate.toFixed(4),
+        cardMarkupRate: null,
+        cardFixedSurchargeAmount: nextCardFixed,
+        isActive: true,
+      });
+      await this.writePricingAudit(tx, {
+        entityId: id,
+        action: 'CREATE',
+        fieldName:
+          nextCardFixed === preservedCardFixed ? 'profitRate' : 'profitRate,cardFixedSurchargeAmount',
+        oldValue: current
+          ? `profit=${this.moneyText(current.profitRate) ?? 'null'};cardFixed=${preservedCardFixed ?? 'null'}`
+          : null,
+        newValue: `profit=${profitRate.toFixed(4)};cardFixed=${nextCardFixed ?? 'null'}`,
+        reason: 'Ayarlı Pervaz fiyatlandırma güncellemesi',
+      });
+      return id;
+    });
+    const groupRate = this.groupCardRateFromCache(String(group.id));
+    return this.toAyarliPervazResponse(
+      { name: String(product.name) },
+      {
+        id: createdId,
+        profitRate: { toString: () => profitRate.toString() },
+        cardFixedSurchargeAmount:
+          nextCardFixed == null ? null : { toString: () => nextCardFixed },
+        isActive: true,
+      },
+      groupRate,
+    );
+  }
+
+  private async replaceDoorBuildGroupSettingOnFirestore(
+    profitRate: ReturnType<typeof toDecimal>,
+    vatRate: ReturnType<typeof toDecimal>,
+    cardMarkupRate: ReturnType<typeof toDecimal> | null,
+  ): Promise<DoorBuildPricingSettingResponse> {
+    const group = this.requireActiveGroupFromCache(DOOR_BUILD_PRODUCT_GROUP_CODE);
+    const current =
+      this.uniqueActiveGroupSettings(String(group.id), DOOR_BUILD_PRODUCT_GROUP_CODE)[0] ?? null;
+    const profitUnchanged = this.ratesEqual(this.moneyText(current?.profitRate), profitRate);
+    const vatUnchanged = this.ratesEqual(this.moneyText(current?.vatRate), vatRate);
+    const cardUnchanged = this.ratesEqual(this.moneyText(current?.cardMarkupRate), cardMarkupRate);
+    if (profitUnchanged && vatUnchanged && cardUnchanged && current) {
+      return {
+        productGroupCode: 'KAPI_IMALATI',
+        productGroupName: String(group.name),
+        settingId: String(current.id),
+        vatRate: this.moneyText(current.vatRate),
+        profitRate: this.moneyText(current.profitRate),
+        cardMarkupRate: this.moneyText(current.cardMarkupRate),
+        isActive: true,
+      };
+    }
+
+    assertPricingSetting({
+      productGroupId: String(group.id),
+      productId: null,
+      vatRate: vatRate.toString(),
+      profitRate: profitRate.toString(),
+      cardMarkupRate: cardMarkupRate?.toString() ?? null,
+      cardFixedSurchargeAmount: null,
+      productGroupIsActive: true,
+    });
+
+    const createdId = await this.firestoreStore!.runTransaction(async (tx) => {
+      if (current) {
+        await this.deactivatePricingSettingOnFirestore(
+          tx,
+          current,
+          'Yeni PricingSetting için eski aktif kayıt kapatıldı (KAPI_IMALATI)',
+        );
+      }
+      const id = this.firestoreStore!.createId();
+      await tx.upsert(FIRESTORE_COLLECTIONS.pricingSettings, id, {
+        id,
+        productGroupId: String(group.id),
+        productId: null,
+        vatRate: vatRate.toFixed(4),
+        profitRate: profitRate.toFixed(4),
+        cardMarkupRate: cardMarkupRate != null ? cardMarkupRate.toFixed(4) : null,
+        cardFixedSurchargeAmount: null,
+        isActive: true,
+      });
+      await this.writePricingAudit(tx, {
+        entityId: id,
+        action: 'CREATE',
+        fieldName: 'profitRate,vatRate,cardMarkupRate',
+        oldValue: current
+          ? `profit=${this.moneyText(current.profitRate) ?? 'null'};vat=${this.moneyText(current.vatRate) ?? 'null'};card=${this.moneyText(current.cardMarkupRate) ?? 'null'}`
+          : null,
+        newValue: `profit=${profitRate.toFixed()};vat=${vatRate.toFixed()};card=${cardMarkupRate?.toFixed() ?? 'null'}`,
+        reason: 'Kapı İmalatı group-scope PricingSetting oluşturuldu',
+      });
+      return id;
+    });
+
+    return {
+      productGroupCode: 'KAPI_IMALATI',
+      productGroupName: String(group.name),
+      settingId: createdId,
+      vatRate: vatRate.toString(),
+      profitRate: profitRate.toString(),
+      cardMarkupRate: cardMarkupRate?.toString() ?? null,
+      isActive: true,
+    };
+  }
+
+  private asRateBox(value: unknown): { toString(): string } | null {
+    const text = this.moneyText(value);
+    return text == null ? null : { toString: () => text };
   }
 }

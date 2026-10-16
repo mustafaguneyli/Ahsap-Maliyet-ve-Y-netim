@@ -6,6 +6,8 @@
 }
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
   background: #1f2937;
   color: #f9fafb;
   padding: 20px 16px;
@@ -19,7 +21,13 @@
 .nav {
   display: flex;
   flex-direction: column;
+  flex: 1;
   gap: 6px;
+}
+
+.logout-button {
+  margin-top: 16px;
+  color: #fecaca;
 }
 
 .nav-button {

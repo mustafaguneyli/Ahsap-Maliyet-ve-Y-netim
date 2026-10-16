@@ -135,6 +135,24 @@ describe('selectCurrentMaterialPrice', () => {
     }
   });
 
+  it('CARD fiyatını CASH seçiminde kullanmaz', () => {
+    const selected = selectCurrentMaterialPrice(
+      [
+        {
+          id: 'card',
+          priceType: MaterialPriceType.CARD_INSTALLMENT,
+          price: { toString: () => '4400' },
+          effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+          effectiveTo: null,
+          isActive: true,
+        },
+      ],
+      MaterialPriceType.CASH,
+      now,
+    );
+    expect(selected).toBeNull();
+  });
+
   it('CASH fiyatını CARD seçiminde kullanmaz', () => {
     const selected = selectCurrentMaterialPrice(
       [

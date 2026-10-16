@@ -316,7 +316,7 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
     expect(result.pricing.cardSalePrice).toBeNull();
   });
 
-  it('CASH seçilince ana parça ve kılçık peşin fiyatı kullanır; NET ve masraf aynı kalır', async () => {
+  it('CASH isteğinde ana parça ve kılçık CARD fiyatını kullanır; NET ve masraf aynı kalır', async () => {
     const { service } = buildService({
       mainYields: [
         { rawMaterial: main9, netQty: 40, pieceWidthMm: 70, pieceLengthMm: 2200 },
@@ -324,7 +324,7 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
       kilcikMasterNetQty: 66,
     });
 
-    const cash = await service.getAyarliPervazMdfCost(
+    const cashRequest = await service.getAyarliPervazMdfCost(
       { productCode: 'AYARLI_PERVAZ', thicknessMm: 9, widthMm: 70, lengthMm: 2200 },
       now,
       'CASH',
@@ -334,27 +334,26 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
       now,
     );
 
-    expect(cash.materialPriceType).toBe('CASH');
-    expect(cash.mainPiece.sheetPriceType).toBe('CASH');
-    expect(cash.kilcik.sheetPriceType).toBe('CASH');
-    expect(cash.mainPiece.sheetPrice).toBe('1600');
-    expect(cash.kilcik.sheetPrice).toBe('900');
-    expect(cash.mainPiece.netQty).toBe(card.mainPiece.netQty);
-    expect(cash.kilcik.netQty).toBe(66);
-    expect(cash.extraCosts).toEqual(card.extraCosts);
-    expect(cash.mainPiece.sheetPrice).not.toBe(card.mainPiece.sheetPrice);
-    expect(cash.pricing.profitRate).toBe(card.pricing.profitRate);
-    expect(cash.pricing.cardSalePrice).toBeNull();
+    expect(cashRequest.materialPriceType).toBe('CARD_INSTALLMENT');
+    expect(cashRequest.mainPiece.sheetPriceType).toBe('CARD_INSTALLMENT');
+    expect(cashRequest.kilcik.sheetPriceType).toBe('CARD_INSTALLMENT');
+    expect(cashRequest.mainPiece.sheetPrice).toBe('1880');
+    expect(cashRequest.kilcik.sheetPrice).toBe('1050');
+    expect(cashRequest.mainPiece.netQty).toBe(card.mainPiece.netQty);
+    expect(cashRequest.kilcik.netQty).toBe(66);
+    expect(cashRequest.extraCosts).toEqual(card.extraCosts);
+    expect(cashRequest.mainPiece.sheetPrice).toBe(card.mainPiece.sheetPrice);
+    expect(cashRequest.pricing.profitRate).toBe(card.pricing.profitRate);
   });
 
-  it('eksik CASH kart fiyatına düşmez', async () => {
-    const cashless = {
+  it('CARD yokken CASH mevcutsa düşmez', async () => {
+    const cardless = {
       ...main9,
-      prices: main9.prices.filter((item) => item.priceType !== MaterialPriceType.CASH),
+      prices: main9.prices.filter((item) => item.priceType !== MaterialPriceType.CARD_INSTALLMENT),
     };
     const { service } = buildService({
       mainYields: [
-        { rawMaterial: cashless, netQty: 40, pieceWidthMm: 70, pieceLengthMm: 2200 },
+        { rawMaterial: cardless, netQty: 40, pieceWidthMm: 70, pieceLengthMm: 2200 },
       ],
       kilcikMasterNetQty: 66,
     });
@@ -365,7 +364,9 @@ describe('CostCalculationService AYARLI_PERVAZ MDF', () => {
         now,
         'CASH',
       ),
-    ).rejects.toThrow('MDF-9-2200X2800-ZIMPARALI için şu an geçerli CASH alış fiyatı bulunamadı.');
+    ).rejects.toThrow(
+      'MDF-9-2200X2800-ZIMPARALI için MDF kart/taksitli alış fiyatı tanımlı değil',
+    );
   });
 
   it('12 mm 10×250 ProductionYield master: 2100 tabaka ve NET 22', async () => {

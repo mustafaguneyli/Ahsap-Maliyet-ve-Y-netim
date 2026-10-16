@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "zirve-ahsap",
+    "development": "zirve-ahsap",
+    "staging": "zirve-ahsap",
+    "production": "zirve-ahsap"
+  }
+}

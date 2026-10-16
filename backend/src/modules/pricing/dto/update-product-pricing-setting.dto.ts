@@ -1,5 +1,6 @@
 import { IsIn, IsNotEmpty, IsOptional, Matches } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { transformDecimalString } from '../pricing-setting.validation';
 
 /**
  * Oranlar yüzde değeri string Decimal (örn. %20 → "20").
@@ -15,20 +16,20 @@ export class UpdateProductPricingSettingDto {
   @Matches(/^\d+(\.\d{1,4})?$/, {
     message: 'KDV oranı geçerli bir Decimal olmalıdır (örn. 0 veya 10).',
   })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim().replace(',', '.') : value))
+  @Transform(transformDecimalString)
   vatRate!: string;
 
   @IsNotEmpty({ message: 'Kâr oranı zorunludur.' })
   @Matches(/^\d+(\.\d{1,4})?$/, {
     message: 'Kâr oranı geçerli bir Decimal olmalıdır (örn. 20).',
   })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim().replace(',', '.') : value))
+  @Transform(transformDecimalString)
   profitRate!: string;
 
   @IsOptional()
   @Matches(/^\d+(\.\d{1,4})?$/, {
     message: 'Kredi kartı farkı geçerli bir Decimal olmalıdır (örn. 20).',
   })
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim().replace(',', '.') : value))
+  @Transform(transformDecimalString)
   cardMarkupRate?: string;
 }

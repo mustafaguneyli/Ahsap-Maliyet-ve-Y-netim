@@ -745,7 +745,7 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
         NOW,
       ),
     ).rejects.toThrow(
-      'Aktif MDF fiyatı bulunamadı: MDF-9-2100X2800-ZIMPARALI / CARD_INSTALLMENT',
+      'MDF-9-2100X2800-ZIMPARALI için MDF kart/taksitli alış fiyatı tanımlı değil',
     );
     expect(prisma.productionYield.findMany).toHaveBeenCalledTimes(1);
     expect(prisma.productionYield.findMany.mock.calls[0][0].where).toMatchObject({
@@ -754,7 +754,7 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
     });
   });
 
-  it('dört varyant seçili CASH veya CARD tabakasını kullanır; NET ve gider aynı kalır', async () => {
+  it('dört varyant CASH isteğinde de CARD tabakasını kullanır; NET ve gider aynı kalır', async () => {
     const row = master(12, 120, 16, '2500');
     row.rawMaterial.prices.push({
       id: 'cash-2000',
@@ -769,7 +769,7 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
     );
 
     for (const productCode of SUPURGELIK_PRODUCT_CODES) {
-      const cash = await service.getSupurgelikMdfCost(
+      const cashRequest = await service.getSupurgelikMdfCost(
         {
           productCode,
           thicknessMm: 12,
@@ -788,22 +788,35 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
         },
         NOW,
       );
-      expect(cash.materialPriceType).toBe('CASH');
-      expect(cash.sheetPrice).toEqual({ priceType: 'CASH', amount: '2000' });
-      expect(cash.mdfUnitCost).toBe(toDecimal('2000').div('16').toFixed());
+      expect(cashRequest.materialPriceType).toBe('CARD_INSTALLMENT');
+      expect(cashRequest.sheetPrice).toEqual({
+        priceType: 'CARD_INSTALLMENT',
+        amount: '2500',
+      });
+      expect(cashRequest.mdfUnitCost).toBe(toDecimal('2500').div('16').toFixed());
       expect(card.sheetPrice).toEqual({
         priceType: 'CARD_INSTALLMENT',
         amount: '2500',
       });
-      expect(card.mdfUnitCost).toBe(toDecimal('2500').div('16').toFixed());
-      expect(cash.productionYield.netQty).toBe(16);
+      expect(card.mdfUnitCost).toBe(cashRequest.mdfUnitCost);
+      expect(cashRequest.productionYield.netQty).toBe(16);
       expect(card.productionYield.netQty).toBe(16);
-      expect(cash.extraCosts).toEqual(card.extraCosts);
+      expect(cashRequest.extraCosts).toEqual(card.extraCosts);
     }
   });
 
-  it('eksik CASH kart fiyatına düşmez', async () => {
+  it('CARD yokken CASH mevcutsa düşmez', async () => {
     const row = master(12, 120, 16, '2500');
+    row.rawMaterial.prices = [
+      {
+        id: 'cash-2000',
+        priceType: MaterialPriceType.CASH,
+        price: new Decimal('2000'),
+        effectiveFrom: new Date('2026-03-01T00:00:00.000Z'),
+        effectiveTo: null,
+        isActive: true,
+      },
+    ];
     const { service } = buildService([row]);
     await expect(
       service.getSupurgelikMdfCost(
@@ -817,7 +830,7 @@ describe('CostCalculationService.getSupurgelikMdfCost', () => {
         NOW,
       ),
     ).rejects.toThrow(
-      'Aktif MDF fiyatı bulunamadı: MDF-12-2100X2800-ZIMPARALI / CASH',
+      'MDF-12-2100X2800-ZIMPARALI için MDF kart/taksitli alış fiyatı tanımlı değil',
     );
   });
 });

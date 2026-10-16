@@ -69,20 +69,26 @@ export async function resolveDoorFrameSizesWithCatalog(
   prisma: PrismaService,
   variant: DoorFrameVariantCode,
 ): Promise<DoorFrameSizeCm[]> {
+  const { currentCatalogCache } = await import('../../data-store/firestore-catalog-cache');
+  const cache = currentCatalogCache();
   const base = getDoorFrameSizes(variant);
   const primaryCode = getPrimaryMaterialCode(variant);
-  const primary = await prisma.rawMaterial.findFirst({
-    where: { code: primaryCode, isActive: true },
-  });
+  const primary = cache
+    ? cache.materialByCode(primaryCode)
+    : await prisma.rawMaterial.findFirst({
+        where: { code: primaryCode, isActive: true },
+      });
   if (!primary) return base;
 
-  const primaryYields = await prisma.productionYield.findMany({
-    where: {
-      productId: null,
-      isActive: true,
-      rawMaterialId: primary.id,
-    },
-  });
+  const primaryYields = cache
+    ? cache.genericYieldsForMaterial(String(primary.id))
+    : await prisma.productionYield.findMany({
+        where: {
+          productId: null,
+          isActive: true,
+          rawMaterialId: String(primary.id),
+        },
+      });
 
   const merged = new Map<string, DoorFrameSizeCm>();
   for (const s of base) {
@@ -90,26 +96,37 @@ export async function resolveDoorFrameSizesWithCatalog(
   }
 
   for (const y of primaryYields) {
-    if (y.pieceWidthMm % 10 !== 0 || y.pieceLengthMm % 10 !== 0) continue;
-    const widthCm = y.pieceWidthMm / 10;
-    const lengthCm = y.pieceLengthMm / 10;
+    const pieceWidthMm = Number(y.pieceWidthMm);
+    const pieceLengthMm = Number(y.pieceLengthMm);
+    if (pieceWidthMm % 10 !== 0 || pieceLengthMm % 10 !== 0) continue;
+    const widthCm = pieceWidthMm / 10;
+    const lengthCm = pieceLengthMm / 10;
     const key = `${widthCm}x${lengthCm}`;
     if (merged.has(key)) continue;
 
     const secondaryCode = getSecondary12MaterialCode(widthCm, lengthCm);
-    const secondary = await prisma.rawMaterial.findFirst({
-      where: { code: secondaryCode, isActive: true },
-    });
+    const secondary = cache
+      ? cache.materialByCode(secondaryCode)
+      : await prisma.rawMaterial.findFirst({
+          where: { code: secondaryCode, isActive: true },
+        });
     if (!secondary) continue;
-    const secondaryYield = await prisma.productionYield.findFirst({
-      where: {
-        productId: null,
-        isActive: true,
-        rawMaterialId: secondary.id,
-        pieceWidthMm: y.pieceWidthMm,
-        pieceLengthMm: y.pieceLengthMm,
-      },
-    });
+    const secondaryYield = cache
+      ? cache.findYield({
+          rawMaterialId: String(secondary.id),
+          pieceWidthMm,
+          pieceLengthMm,
+          productId: null,
+        })
+      : await prisma.productionYield.findFirst({
+          where: {
+            productId: null,
+            isActive: true,
+            rawMaterialId: String(secondary.id),
+            pieceWidthMm,
+            pieceLengthMm,
+          },
+        });
     if (!secondaryYield) continue;
     merged.set(key, { widthCm, lengthCm });
   }

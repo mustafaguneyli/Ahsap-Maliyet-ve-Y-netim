@@ -1,4 +1,4 @@
-import { HttpException, Injectable } from '@nestjs/common';
+import { HttpException, Injectable, Optional } from '@nestjs/common';
 import { CalculatorType, MaterialPriceType } from '@prisma/client';
 import { SUPURGELIK_PRODUCT_CODES } from '../../calculation-engine/calculators/supurgelik-mdf-calculator';
 import type { DoorFrameVariantCode } from '../../calculation-engine/calculators/door-frame-variants';
@@ -6,6 +6,9 @@ import { CitaListService } from '../cost-calculation/cita-list.service';
 import { CostCalculationService } from '../cost-calculation/cost-calculation.service';
 import { GenericRecipeService } from '../cost-calculation/generic-recipe.service';
 import { PrismaService } from '../../prisma/prisma.service';
+import { DataStoreConfig } from '../../data-store/data-store.config';
+import { FirestoreDocumentStore } from '../../data-store/firestore.document-store';
+import { currentCatalogCache, withCatalogCache } from '../../data-store/firestore-catalog-cache';
 import {
   FALLBACK_CARD_REASON,
   FALLBACK_SALE_REASON,
@@ -39,23 +42,19 @@ export class PriceListService {
     private readonly costCalculationService: CostCalculationService,
     private readonly citaListService: CitaListService,
     private readonly genericRecipeService: GenericRecipeService,
+    @Optional() private readonly dataStore?: DataStoreConfig,
+    @Optional() private readonly firestoreStore?: FirestoreDocumentStore,
   ) {}
 
   /**
    * Satış fiyatı listesi. Kendi formülü yoktur; mevcut calculator listelerini okur.
    */
   async getPriceList(now: Date = new Date()): Promise<PriceListDocument> {
+    if (this.dataStore?.isFirestore() && this.firestoreStore && !currentCatalogCache()) {
+      return withCatalogCache(this.firestoreStore, () => this.getPriceList(now));
+    }
     const [groups, sizeIds] = await Promise.all([
-      this.prisma.productGroup.findMany({
-        where: { isActive: true },
-        include: {
-          products: {
-            where: { isActive: true },
-            orderBy: { name: 'asc' },
-            select: { id: true, code: true, name: true, isActive: true },
-          },
-        },
-      }),
+      this.loadActiveGroups(),
       this.loadSizeIds(),
     ]);
 
@@ -78,7 +77,38 @@ export class PriceListService {
     };
   }
 
+  private async loadActiveGroups() {
+    const cache = currentCatalogCache();
+    if (cache) {
+      return cache.activeGroups().map((group) => ({
+        code: String(group.code),
+        name: String(group.name),
+        calculatorType: group.calculatorType as CalculatorType,
+        products: cache.productsByGroup(String(group.id)).map((product) => ({
+          id: String(product.id),
+          code: String(product.code),
+          name: String(product.name),
+          isActive: true,
+        })),
+      }));
+    }
+    return this.prisma.productGroup.findMany({
+      where: { isActive: true },
+      include: {
+        products: {
+          where: { isActive: true },
+          orderBy: { name: 'asc' },
+          select: { id: true, code: true, name: true, isActive: true },
+        },
+      },
+    });
+  }
+
   private async loadSizeIds(): Promise<SizeIdIndex> {
+    const cache = currentCatalogCache();
+    if (cache) {
+      return cache.sizeIdIndex();
+    }
     const sizes = await this.prisma.productSize.findMany({
       select: { id: true, widthMm: true, lengthMm: true },
     });

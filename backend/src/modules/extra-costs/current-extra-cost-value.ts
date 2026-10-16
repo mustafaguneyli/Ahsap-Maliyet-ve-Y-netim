@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { isCurrentlyEffective } from '../../firebase/firestore-dates';
 
 export type ExtraCostValueRow = {
   id: string;
@@ -24,9 +25,7 @@ export function selectCurrentExtraCostValue(
   const candidates = values
     .filter(
       (v) =>
-        v.isActive &&
-        v.effectiveFrom.getTime() <= now.getTime() &&
-        (v.effectiveTo == null || v.effectiveTo.getTime() > now.getTime()),
+        v.isActive && isCurrentlyEffective(v.effectiveFrom, v.effectiveTo, now),
     )
     .sort((a, b) => b.effectiveFrom.getTime() - a.effectiveFrom.getTime());
 
